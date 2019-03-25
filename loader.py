@@ -1,21 +1,14 @@
 import os
-from glob import glob
 
 import torch
-from torchvision.datasets import ImageFolder
 from torch.utils.data.dataset import Dataset
-from torchvision import transforms
 from torch.utils.data import DataLoader
-from torch.nn.utils.rnn import pad_sequence
 
 import pandas as pd
 import numpy as np
-import scipy.sparse
 
 from tqdm import tqdm
 
-LOCAL_DATA_FOLDER = "C:/Users/Jeffy/Downloads/Data/project"
-SERVER_DATA_FOLDER = "/home/ubuntu/Data/project"
 EMBEDDING_DIM = 50
 
 
@@ -80,10 +73,10 @@ def check_sys_path():
     :return: absolute path of the folder to store data
     """
     cwd = os.getcwd()
-    if "ubuntu" in cwd:  # local env
-        return SERVER_DATA_FOLDER
+    if "jeffy" in cwd.lower():  # local env
+        return "C:\\Users\\Jeffy\\Downloads\\Data\\project"
     else:  # aws env
-        return LOCAL_DATA_FOLDER
+        return "data"
 
 
 def get_metrics_df():

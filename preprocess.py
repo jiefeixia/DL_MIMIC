@@ -18,8 +18,8 @@ args = parser.parse_args()
 
 if __name__ == '__main__':
     # read data
-    df = pd.read_csv(os.path.join(check_sys_path(), "discharge_notes_with_medication_full_text.csv"))
-    df = df[df["admission_notes"].notna()][0:1000]
+    df = pd.read_csv(os.path.join(check_sys_path(), "discharge_notes_with_medication_full_textv2.csv"))
+    df = df[df["admission_notes"].notna()]
 
     # set random indexing for splitting training and validation data
     random_idx = np.random.permutation(np.arange(df.shape[0]))
