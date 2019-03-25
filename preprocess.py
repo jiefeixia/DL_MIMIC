@@ -22,12 +22,19 @@ if __name__ == '__main__':
     df = df[df["admission_notes"].notna()]
 
     # set random indexing for splitting training and validation data
+    print("random splitting data into training and validation data set...")
     random_idx = np.random.permutation(np.arange(df.shape[0]))
     train_idx = random_idx[0:int(0.8 * len(random_idx))]  # select first 80% as training data
     val_idx = random_idx[int(0.8 * len(random_idx)):-1]  # random select 20% as validation data
 
     discharge_notes = df["discharge_notes"][train_idx].fillna("").tolist()
     admission_notes = df["admission_notes"].fillna("").tolist()
+    # calculate relative freq for each label
+    print("relative freq for each label in training data")
+    medicines = list(df.iloc[train_idx, -8:].columns)
+    freq = df.iloc[train_idx, -8:].sum()/train_idx.shape[0]
+    for i, medicine in enumerate(medicines):
+        print("%20s:%.2f" % (medicine, freq[i]))
 
     # train nlp model
     print("training nlp model...")

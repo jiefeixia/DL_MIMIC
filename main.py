@@ -119,10 +119,10 @@ def train(epoch, writer):
             loss = criterion(outputs, y)
             loss.backward()
 
-            predicted = torch.zeros(outputs.shape).cuda()
-            predicted[outputs > 0.5] = 1.0
+            pred = torch.zeros(outputs.shape).cuda()
+            pred[outputs > 0.5] = 1.0
             total_predictions += y.shape[0] * y.shape[1]
-            correct_predictions += (predicted == y).sum().item()
+            correct_predictions += (pred == y).sum().item()
 
             running_loss += loss.item()
 
@@ -134,10 +134,11 @@ def train(epoch, writer):
                 writer.add_scalar("Train Loss", loss.item(), niter)
 
                 # metrics
-                p, r, f1, _ = precision_recall_fscore_support(y.cpu().numpy(), predicted.cpu().numpy())
+                p, r, f1, _ = precision_recall_fscore_support(y.cpu().numpy(), pred.cpu().numpy())
                 acc = (correct_predictions / total_predictions)
-                pbar.set_postfix(loss=round(loss.item(), 4),
+                pbar.set_postfix(curr_loss=round(loss.item(), 4),
                                  acc_avg=round(acc, 4),
+                                 f1=round(np.average(f1), 4)
                                  )
 
                 pbar.update(10 if pbar.n + 50 <= pbar.total else pbar.total - pbar.n)
@@ -155,6 +156,7 @@ def validate():
         running_loss = 0.0
         total_predictions = 0.0
         correct_predictions = 0.0
+        preds = []
 
         for batch_idx, (x, y) in enumerate(val_loader):
             x, y = x.cuda().float(), y.cuda().float()
@@ -162,26 +164,28 @@ def validate():
 
             loss = criterion(outputs, y).detach()
 
-            predicted = torch.zeros(outputs.shape).cuda()
-            predicted[outputs > 0.5] = 1.0
+            pred = torch.zeros(outputs.shape).cuda()
+            pred[outputs > 0.5] = 1.0
+            preds += list(pred.cpu().numpy())
             total_predictions += y.shape[0] * y.shape[1]
-            correct_predictions += (predicted == y).sum().item()
+            correct_predictions += (pred == y).sum().item()
 
             running_loss += loss.item()
 
         running_loss /= len(val_loader)
         acc = (correct_predictions / total_predictions)
-        p, r, f1, _ = precision_recall_fscore_support(y.cpu().numpy(), predicted.cpu().numpy())
-        return running_loss, acc, p, r, f1
+        p, r, f1, _ = precision_recall_fscore_support(y.cpu().numpy(), pred.cpu().numpy())
+
+        return running_loss, acc, p, r, f1, np.array(preds)
 
 
-def predict():
-    _, _, val_p, val_r, val_f1 = validate()
+def evaluate(p, r, f1, dataset):
     metrics = get_metrics_df()
     for i in range(metrics.shape[0]):
-        metrics.iloc[i] = val_p[i], val_r[i], val_f1[i]
+        metrics.iloc[i] = p[i], r[i], f1[i]
+    metrics.loc["micro_avg"] = np.average([p, r, f1], axis=1)
     metrics = metrics.round(3)
-    metrics.to_csv("result/%s_val.csv" % model_stamp)
+    metrics.to_csv("result/%s_%s.csv" % (model_stamp, dataset))
 
 
 def run_epochs():
@@ -204,39 +208,38 @@ def run_epochs():
         val_losses = []
 
     print("start training from epoch", epoch, "-", args.epoch)
-    best_val_acc = 0.
+    print("statistics for epoch are average among samples and micro average among classes if possible")
+    best_val_f1 = 0
     for e in range(epoch, args.epoch):
         if args.annealing:
             scheduler.step()
 
         train_loss, train_acc, train_p, train_r, train_f1 = train(epoch, writer)
-        val_loss, val_acc, val_p, val_r, val_f1 = validate()
+        val_loss, val_acc, val_p, val_r, val_f1, preds = validate()
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
-        print("\re %3d: |Train avg loss: %.3f|Train avg acc: %.3f|Val avg loss: %.3f|Val avg acc: %.3f" %
-              (e, train_loss, train_acc, val_loss, val_acc))
+        print("\re %3d: Train:l:%.3f|acc:%.3f|p:%.3f|r:%.3f|f1:%.3f|||Val:l:%.3f|acc:%.3f|p:%.3f|r:%.3f|f1:%.3f" %
+              (e, train_loss, train_acc, *np.average([train_p, train_r, train_f1], axis=1),
+               val_loss, val_acc, *np.average([val_p, val_r, val_f1], axis=1)))
 
         # save check point
-        if not args.debug and val_acc > best_val_acc:
-            best_val_acc = val_acc
+        if not args.debug and np.average(val_f1) > best_val_f1:
+            best_val_f1 = np.average(val_f1)
+            # save model
             state = {'net': net.state_dict(),
                      "train_losses": train_losses,
                      "val_losses": val_losses,
                      'epoch': e,
                      }
             torch.save(state, '%s.pth' % model_stamp)
+            # evaluate model
+            evaluate(train_p, train_r, train_f1, dataset="train")
+            evaluate(val_p, val_r, val_f1, dataset="val")
+            np.save("result/%s_pred.npy" % model_stamp, np.array(preds))
+
     writer.close()
-
-    # store precision, recall and f1 score metrics of training and validation data
-    metrics = get_metrics_df()
-    for i in range(metrics.shape[0]):
-        metrics.iloc[i] = train_p[i], train_r[i], train_f1[i]
-    metrics = metrics.round(3)
-    metrics.to_csv("result/%s_train.csv" % model_stamp)
-
-    predict()
 
 
 """###################################  main  ###################################"""
@@ -259,6 +262,3 @@ if __name__ == '__main__':
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 
     run_epochs()
-
-    if args.predict:
-        predict()

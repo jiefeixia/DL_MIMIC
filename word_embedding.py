@@ -8,6 +8,8 @@ from loader import *
 from torch.utils.data import DataLoader
 import torch
 import argparse
+from sklearn.neighbors import NearestNeighbors
+
 
 parser = argparse.ArgumentParser(description='embedding model')
 parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
@@ -84,8 +86,7 @@ if __name__ == '__main__':
         print("transforming idx data %s to embedding data %s..." % (infile, outfile))
         transform_dataset = IdxData(context_size=-1, file=infile)
         transform_loader = DataLoader(transform_dataset,
-                                      batch_size=1,  # because the number of words in different note
-                                                     # is in different length
+                                      batch_size=1,  # because the num of words in different note is different
                                       num_workers=1,
                                       shuffle=False)
         with torch.no_grad():
@@ -96,7 +97,7 @@ if __name__ == '__main__':
                 embedding = net.embeddings(note)
 
                 embedding = embedding.cpu().numpy().astype("float32")
-                embeddings.append(embedding[0])  # batch size == 1
+                embeddings.append(embedding[0])  # batch size = 1, select the item
 
         notes_embedding = np.array(embeddings)
         np.save(os.path.join(check_sys_path(), outfile), notes_embedding)
@@ -104,3 +105,45 @@ if __name__ == '__main__':
 
     transform("train_idx.npy", "train_%dembedding.npy" % args.embedding_dim)
     transform("val_idx.npy", "val_%dembedding.npy" % args.embedding_dim)
+
+    # find most closed words to medicines on embedding space to evaluate
+    print("finding most relevant words of medicine (nearest neighbour on embedding space...")
+
+    idx_med = dict()
+    with open(os.path.join(check_sys_path(), "med_idx.txt")) as f:
+        for line in f:
+            med, idx = line.split(":")
+            idx_med[int(idx)] = med
+
+    idx_word = dict()
+    with open(os.path.join(check_sys_path(), "word_idx.txt")) as f:
+        for line in f:
+            word, idx = line.split(":")
+            idx_word[int(idx)] = word
+
+    print("calculating embeddings for all words and medicines")
+    # get embedding of all words
+    for med in idx_med.keys():  # remove medicines idx from words idx
+        idx_word.pop(med, None)
+    words = np.array(list(idx_word.keys()))
+    words_embedding = net.embeddings(torch.from_numpy(words).long().cuda())
+    words_embedding = words_embedding.cpu().detach().numpy()
+
+    # get embedding of all medicines
+    meds = np.array(list(idx_med.keys()))
+    meds_embedding = net.embeddings(torch.from_numpy(meds).long().cuda())
+    meds_embedding = meds_embedding.cpu().detach().numpy()
+
+    n_neighbors = 5
+    print("calculating top %d nearest neighbours for medicines" % n_neighbors)
+    neigh = NearestNeighbors(n_neighbors=n_neighbors, n_jobs=-1)
+    neigh.fit(words_embedding)
+    dist, ind = neigh.kneighbors(meds_embedding)
+
+    with open("result/word_embedding%d.txt" % args.embedding_dim, "w") as f:
+        for i, med in enumerate(list(idx_med.values())):
+            s = med + ": " + str([(idx_word[words[ind[i, j]]], round(dist[i, j], 2)) for j in range(n_neighbors)])
+            print(s)
+            f.write(s + "\n")
+
+
