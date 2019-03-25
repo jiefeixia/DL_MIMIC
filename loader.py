@@ -1,0 +1,107 @@
+import os
+from glob import glob
+
+import torch
+from torchvision.datasets import ImageFolder
+from torch.utils.data.dataset import Dataset
+from torchvision import transforms
+from torch.utils.data import DataLoader
+from torch.nn.utils.rnn import pad_sequence
+
+import pandas as pd
+import numpy as np
+import scipy.sparse
+
+from tqdm import tqdm
+
+LOCAL_DATA_FOLDER = "C:/Users/Jeffy/Downloads/Data/project"
+SERVER_DATA_FOLDER = "/home/ubuntu/Data/project"
+EMBEDDING_DIM = 50
+
+
+class IdxData(Dataset):
+    def __init__(self, context_size, file):
+        filepath = os.path.join(check_sys_path(), file)
+        print("loading data from", filepath)
+        notes = np.load(filepath)
+
+        if context_size > 0:  # load discharge notes to train embedding layer
+            self.data = []
+            for note in notes:
+                for i in range(len(note) - context_size):
+                    self.data.append(note[i:i + context_size + 1])
+            self.data = np.array(self.data)
+        else:  # load admission notes to transform it from idx to embeddings
+            self.data = notes
+
+    @staticmethod
+    def get_vacab_size():
+        with open(os.path.join(check_sys_path(), "word_idx.txt")) as f:
+            vocab_size = len(f.readlines())
+        return vocab_size
+
+    def __getitem__(self, item):
+        return self.data[item]
+
+    def __len__(self):
+        return len(self.data)
+
+
+class EmbeddingData(Dataset):
+    def __init__(self, dataset):
+        if dataset == "train":
+            x_path = "train_%dembedding.npy" % EMBEDDING_DIM
+            y_path = "train_label.npy"
+        else:
+            x_path = "val_%dembedding.npy" % EMBEDDING_DIM
+            y_path = "val_label.npy"
+
+        print("padding ...")
+        X = np.load(os.path.join(check_sys_path(), x_path))
+        max_len = np.max([len(note) for note in X])
+        self.X = np.zeros((X.shape[0], EMBEDDING_DIM, max_len))
+        for i, note in tqdm(enumerate(X)):
+            self.X[i, :, 0:len(note)] = np.moveaxis(note, 0, 1)
+        self.y = np.load(os.path.join(check_sys_path(), y_path))
+
+    @staticmethod
+    def get_embedding_dim():
+        return EMBEDDING_DIM
+
+    def __getitem__(self, idx):
+        return torch.from_numpy(self.X[idx]), torch.from_numpy(self.y[idx])
+
+    def __len__(self):
+        return self.X.shape[0]
+
+
+def check_sys_path():
+    """
+    :return: absolute path of the folder to store data
+    """
+    cwd = os.getcwd()
+    if "ubuntu" in cwd:  # local env
+        return SERVER_DATA_FOLDER
+    else:  # aws env
+        return LOCAL_DATA_FOLDER
+
+
+def get_metrics_df():
+    df = pd.DataFrame({"p": [-1] * 8, "r": [-1] * 8, "f1": [-1] * 8})
+    with open(os.path.join(check_sys_path(), "med_idx.txt")) as f:
+        medicines = [line.split(":")[0] for line in f]
+    df.index = medicines
+    return df
+
+
+if __name__ == '__main__':
+    data = IdxData(-1, "train_idx.npy")
+    data.__getitem__(100)
+
+    train_loader = DataLoader(data,
+                              batch_size=128,
+                              num_workers=4,
+                              shuffle=True)
+
+    for batch_idx, words in enumerate(train_loader):
+        break
