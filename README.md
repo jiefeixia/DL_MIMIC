@@ -3,3 +3,8 @@
 
 To run this model, you must have a GPU.
 
+The data pipline:
+
+The embedding model:
+
+The medicine prediction model:
