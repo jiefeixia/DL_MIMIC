@@ -108,6 +108,7 @@ if __name__ == '__main__':
 
     # find most closed words to medicines on embedding space to evaluate
     print("finding most relevant words of medicine (nearest neighbour on embedding space...")
+    # TODO: test performance on T-SNE low dimension space
 
     idx_med = dict()
     with open(os.path.join(check_sys_path(), "med_idx.txt")) as f:
