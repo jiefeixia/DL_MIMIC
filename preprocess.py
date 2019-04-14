@@ -12,8 +12,8 @@ MEDICINE_COL = ["metoprolol", "furosemide", "lisinopril", "amlodipine", "atenolo
                 "carvedilol"]
 
 parser = argparse.ArgumentParser(description='embedding model')
-parser.add_argument('--min_freq', default=10, type=int, help='learning rate')
-parser.add_argument('--max_df', default=0.8, type=float, help='batch size')
+parser.add_argument('--min_freq', default=10, type=int, help='learning rate')#wrong descriptions?
+parser.add_argument('--max_df', default=0.8, type=float, help='batch size')#wrong descriptions?
 args = parser.parse_args()
 
 if __name__ == '__main__':
@@ -58,9 +58,9 @@ if __name__ == '__main__':
 
     np.save(os.path.join(check_sys_path(), "embedding_train_idx.npy"), discharge_notes_idx)
     np.save(os.path.join(check_sys_path(), "train_idx.npy"), admission_notes_idx[train_idx])
-    np.save(os.path.join(check_sys_path(), "train_label.npy"), df.loc[train_idx, MEDICINE_COL].to_numpy())
+    np.save(os.path.join(check_sys_path(), "train_label.npy"), np.array(df.loc[train_idx, MEDICINE_COL]))#.to_numpy())
     np.save(os.path.join(check_sys_path(), "val_idx.npy"), admission_notes_idx[val_idx])
-    np.save(os.path.join(check_sys_path(), "val_label.npy"), df.loc[val_idx, MEDICINE_COL].to_numpy())
+    np.save(os.path.join(check_sys_path(), "val_label.npy"), np.array(df.loc[val_idx, MEDICINE_COL]))#.to_numpy())
 
     # save dict
     with open(os.path.join(check_sys_path(), "word_idx.txt"), "w") as f:
