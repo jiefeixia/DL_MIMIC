@@ -9,10 +9,14 @@ import numpy as np
 
 from tqdm import tqdm
 
-EMBEDDING_DIM = 50
+EMBEDDING_DIM = 256
 
 
 class IdxData(Dataset):
+    """
+    only used for traing embedding layer
+    """
+
     def __init__(self, context_size, file):
         filepath = os.path.join(check_sys_path(), file)
         print("loading data from", filepath)
@@ -40,15 +44,40 @@ class IdxData(Dataset):
         return len(self.data)
 
 
+class Data(Dataset):
+    """
+    used to traing main prediction model
+    """
+    def __init__(self, dataset):
+        if dataset == "train":
+            x_path = "train_idx"
+            y_path = "train_label.npy"
+        else:
+            x_path = "val_idx"
+            y_path = "val_label.npy"
+
+        print("padding ...")
+        self.X = np.load(os.path.join(check_sys_path(), x_path))
+        self.y = np.load(os.path.join(check_sys_path(), y_path))
+
+    @staticmethod
+    def get_embedding_dim():
+        return EMBEDDING_DIM
+
+    def __getitem__(self, idx):
+        return torch.from_numpy(self.X[idx]), torch.from_numpy(self.y[idx])
+
+    def __len__(self):
+        return self.X.shape[0]
+
+
 class EmbeddingData(Dataset):
     def __init__(self, dataset):
         if dataset == "train":
-            # x_path = "train_%dembedding.npy" % EMBEDDING_DIM
-            x_path = "train_idx.npy"
+            x_path = "train_%dembedding.npy" % EMBEDDING_DIM
             y_path = "train_label.npy"
         else:
-            # x_path = "val_%dembedding.npy" % EMBEDDING_DIM
-            x_path = "val_idx.npy"
+            x_path = "val_%dembedding.npy" % EMBEDDING_DIM
             y_path = "val_label.npy"
 
         print("padding ...")

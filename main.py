@@ -23,7 +23,7 @@ from loader import *
 
 """###################################  init  ###################################"""
 parser = argparse.ArgumentParser(description='predication model')
-parser.add_argument('--model', "-m", type=str, default="CNN", help='Choose model structure')
+parser.add_argument('--model', "-m", type=str, default="Embed_CNN", help='Choose model structure')
 parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
 parser.add_argument('--annealing', action='store_true', help='annealing')
 parser.add_argument('--batch_size', default=128, type=int, help='batch size')
@@ -42,8 +42,15 @@ def init():
     if args.model == "CNN":
         net = CNN(embedding_dim=EmbeddingData.get_embedding_dim(),
                   num_classes=8)
+    elif args.model == "Embed_CNN":
+        net = Embed_CNN(vocab_size=IdxData.get_vacab_size(),
+                        embedding_dim=EmbeddingData.get_embedding_dim(),
+                        num_classes=8)
+    elif args.model == "LSTM":
+        net = LSTM(vocab_size=IdxData.get_vacab_size(),
+                   embedding_dim=EmbeddingData.get_embedding_dim(),
+                   num_classes=8)
     else:
-        net = None
         print("no specific model")
         sys.exit(0)
 
@@ -75,13 +82,15 @@ def data_loader():
 
     print("loading data...")
 
-    val_dataset = EmbeddingData("validation")
+    # val_dataset = EmbeddingData("validation")
+    val_dataset = Data("validation")
 
     if args.debug or args.predict:
         print("loading train dataset as the small validation dataset...")
         train_dataset = val_dataset
     else:
-        train_dataset = EmbeddingData("train")
+        # train_dataset = EmbeddingData("train")
+        train_dataset = Data("train")
 
     val_loader = DataLoader(val_dataset,
                             batch_size=args.batch_size,
