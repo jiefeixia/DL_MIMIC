@@ -43,10 +43,12 @@ class IdxData(Dataset):
 class EmbeddingData(Dataset):
     def __init__(self, dataset):
         if dataset == "train":
-            x_path = "train_%dembedding.npy" % EMBEDDING_DIM
+            # x_path = "train_%dembedding.npy" % EMBEDDING_DIM
+            x_path = "train_idx.npy"
             y_path = "train_label.npy"
         else:
-            x_path = "val_%dembedding.npy" % EMBEDDING_DIM
+            # x_path = "val_%dembedding.npy" % EMBEDDING_DIM
+            x_path = "val_idx.npy"
             y_path = "val_label.npy"
 
         print("padding ...")
