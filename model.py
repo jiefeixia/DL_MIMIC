@@ -109,7 +109,7 @@ class LSTM(nn.Module):
         out = F.max_pool1d(out, out.shape[2])  # (B, Hidden, 1)
         out = out.resize(out.shape[0], out.shape[1])   # (B, Hidden)
 
-        out = nn.ReLU(self.linear(out))
+        out = F.relu(self.linear(out))
         out = self.dropout(out)
         out = self.fc(out)
         return out
