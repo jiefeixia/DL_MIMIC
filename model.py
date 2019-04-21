@@ -93,7 +93,7 @@ class LSTM(nn.Module):
                             dropout=dropout,
                             batch_first=True)
 
-        self.linear = nn.Linear(hidden_size, 64)
+        self.linear = nn.Linear(hidden_size * 2, 64)
         self.dropout = nn.Dropout(p=0.2)
 
         self.fc = nn.Linear(64, num_classes)
