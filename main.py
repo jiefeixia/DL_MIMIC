@@ -23,7 +23,7 @@ from loader import *
 
 """###################################  init  ###################################"""
 parser = argparse.ArgumentParser(description='predication model')
-parser.add_argument('--model', "-m", type=str, default="Embed_CNN", help='Choose model structure')
+parser.add_argument('--model', "-m", type=str, default="CNN", help='Choose model structure')
 parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
 parser.add_argument('--annealing', action='store_true', help='annealing')
 parser.add_argument('--batch_size', default=128, type=int, help='batch size')
@@ -40,15 +40,15 @@ def init():
     global model_stamp
 
     if args.model == "CNN":
-        net = CNN(embedding_dim=EmbeddingData.get_embedding_dim(),
+        net = CNN(vocab_size=IdxData.get_vacab_size(),
+                  embedding_dim=EmbeddingData.get_embedding_dim(),
                   num_classes=8)
-    elif args.model == "Embed_CNN":
-        net = Embed_CNN(vocab_size=IdxData.get_vacab_size(),
-                        embedding_dim=EmbeddingData.get_embedding_dim(),
-                        num_classes=8)
     elif args.model == "LSTM":
         net = LSTM(vocab_size=IdxData.get_vacab_size(),
                    embedding_dim=EmbeddingData.get_embedding_dim(),
+                   hidden_size=512,
+                   layers=3,
+                   dropout=0.2,
                    num_classes=8)
     else:
         print("no specific model")
@@ -95,12 +95,14 @@ def data_loader():
     val_loader = DataLoader(val_dataset,
                             batch_size=args.batch_size,
                             num_workers=8,
-                            shuffle=True)
+                            shuffle=True,
+                            collate_fn=collate)
 
     train_loader = DataLoader(train_dataset,
                               batch_size=args.batch_size,
                               num_workers=8,
-                              shuffle=True)
+                              shuffle=True,
+                              collate_fn=collate)
 
 
 """###################################  train  ###################################"""
@@ -119,11 +121,11 @@ def train(epoch, writer):
     f1 = 0.0
 
     with tqdm(total=int(len(train_loader)), ascii=True) as pbar:
-        for batch_idx, (x, y) in enumerate(train_loader):
-            x, y = x.cuda().float(), y.cuda().float()
+        for batch_idx, (x, seq_len, y) in enumerate(train_loader):
+            x, y = x.cuda(), y.cuda()
             optimizer.zero_grad()
 
-            outputs = net(x)
+            outputs = net(x, seq_len)
 
             loss = criterion(outputs, y)
             loss.backward()
@@ -167,9 +169,9 @@ def validate():
         correct_predictions = 0.0
         preds = []
 
-        for batch_idx, (x, y) in enumerate(val_loader):
-            x, y = x.cuda().float(), y.cuda().float()
-            outputs = net(x)
+        for batch_idx, (x, seq_len, y) in enumerate(val_loader):
+            x, y = x.cuda(), y.cuda()
+            outputs = net(x, seq_len)
 
             loss = criterion(outputs, y).detach()
 

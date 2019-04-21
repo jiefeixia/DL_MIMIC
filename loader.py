@@ -3,6 +3,7 @@ import os
 import torch
 from torch.utils.data.dataset import Dataset
 from torch.utils.data import DataLoader
+import torch.nn.utils.rnn as rnn
 
 import pandas as pd
 import numpy as np
@@ -48,27 +49,34 @@ class Data(Dataset):
     """
     used to traing main prediction model
     """
+
     def __init__(self, dataset):
         if dataset == "train":
-            x_path = "train_idx"
+            x_path = "train_idx.npy"
             y_path = "train_label.npy"
         else:
-            x_path = "val_idx"
+            x_path = "val_idx.npy"
             y_path = "val_label.npy"
 
-        print("padding ...")
-        self.X = np.load(os.path.join(check_sys_path(), x_path))
-        self.y = np.load(os.path.join(check_sys_path(), y_path))
+        X = np.load(os.path.join(check_sys_path(), x_path))
+        y = np.load(os.path.join(check_sys_path(), y_path))
+
+        self.X = []
+        self.y = []
+        for i, x in enumerate(X):
+            if x.shape[0] > 0:
+                self.X.append(x)
+                self.y.append(y[i])
 
     @staticmethod
     def get_embedding_dim():
         return EMBEDDING_DIM
 
     def __getitem__(self, idx):
-        return torch.from_numpy(self.X[idx]), torch.from_numpy(self.y[idx])
+        return self.X[idx], self.y[idx]
 
     def __len__(self):
-        return self.X.shape[0]
+        return len(self.X)
 
 
 class EmbeddingData(Dataset):
@@ -118,14 +126,31 @@ def get_metrics_df():
     return df
 
 
+def collate(batch):
+    """
+    :param batch: [(X(len), y(classes)) * batch_size]
+    :return: [X(padded_len, batch_size, in chan), y(sum(len)]
+    """
+    X, y = zip(*batch)
+    seq_len = torch.tensor([x.shape[0] for x in X])
+    sorted_input_len, sorted_idx = seq_len.sort(descending=True)
+    X = [torch.from_numpy(X[i]) for i in sorted_idx]
+    y = [y[i] for i in sorted_idx]
+    y = torch.from_numpy(np.array(y))
+    X = rnn.pad_sequence(X, batch_first=True)
+    return X.long(), sorted_input_len, y.float()
+
+
 if __name__ == '__main__':
-    data = IdxData(-1, "train_idx.npy")
+    data = Data("validation")
     data.__getitem__(100)
 
     train_loader = DataLoader(data,
                               batch_size=128,
                               num_workers=4,
-                              shuffle=True)
+                              shuffle=True,
+                              collate_fn=collate)
 
-    for batch_idx, words in enumerate(train_loader):
-        break
+    for batch_idx, (x, seq_len, y) in enumerate(train_loader):
+        print(x)
+        print(y)
