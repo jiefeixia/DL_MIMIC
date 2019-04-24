@@ -51,15 +51,21 @@ class Data(Dataset):
     """
 
     def __init__(self, dataset):
+        self.name = dataset
+
         if dataset == "train":
             x_path = "train_idx.npy"
             y_path = "train_label.npy"
-        else:
+        elif dataset == "validation":
             x_path = "val_idx.npy"
             y_path = "val_label.npy"
+        else:
+            x_path = "test_idx.npy"
+            y_path = "test_label.npy"
 
         X = np.load(os.path.join(check_sys_path(), x_path))
         y = np.load(os.path.join(check_sys_path(), y_path))
+        self.proportion = np.sum(y, axis=0) / np.sum(y)
 
         self.X = []
         self.y = []
