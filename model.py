@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.nn.utils.rnn as rnn
 
 
-class CNN(nn.Module):
+class PureCNN(nn.Module):
     def __init__(self, embedding_dim, num_classes):
         super(CNN, self).__init__()
         self.name = "CNN"
@@ -28,7 +28,7 @@ class CNN(nn.Module):
         out = F.relu(self.linear(out))
         
         out = self.fc(out)
-        out = out.LogSoftmax(1)
+#         out = out.LogSoftmax(1)
         return out
 
 
@@ -53,7 +53,7 @@ class NGramLanguageModeler(nn.Module):
         return log_probs
 
 
-class Embed_CNN(nn.Module):
+class CNN(nn.Module):
     def __init__(self, vocab_size, embedding_dim, num_classes):
         super(Embed_CNN, self).__init__()
         self.name = "Embed_CNN"
@@ -78,7 +78,7 @@ class Embed_CNN(nn.Module):
         out = self.dropout(out)
         out = self.linear(out)
         out = self.fc(out)
-        out = out.LogSoftmax(1)
+#         out = out.LogSoftmax(1)
         return out
 
 
@@ -113,5 +113,5 @@ class LSTM(nn.Module):
         out = F.relu(self.linear(out))
         out = self.dropout(out)
         out = self.fc(out)
-        out = out.LogSoftmax(1)
+#         out = out.LogSoftmax(1)
         return out
