@@ -48,7 +48,7 @@ def init():
                    embedding_dim=EmbeddingData.get_embedding_dim(),
                    hidden_size=512,
                    layers=3,
-                   dropout=0.2,
+                   dropout=0,
                    num_classes=8)
     else:
         print("no specific model")
@@ -78,9 +78,15 @@ def init():
 
 
 def data_loader():
-    global train_loader, val_loader
+    global train_loader, val_loader, train_dataset, val_dataset, test_dataset, test_loader
 
     print("loading data...")
+    test_dataset = Data("test")
+    test_loader = DataLoader(test_dataset,
+                             batch_size=args.batch_size,
+                             num_workers=8,
+                             shuffle=False,
+                             collate_fn=collate)
 
     # val_dataset = EmbeddingData("validation")
     val_dataset = Data("validation")
@@ -127,13 +133,15 @@ def train(epoch, writer):
 
             outputs = net(x, seq_len)
 
+            outputs = outputs.cuda().double()
+            y = y.cuda().double()
             loss = criterion(outputs, y)
             loss.backward()
 
             pred = torch.zeros(outputs.shape).cuda()
             pred[outputs > 0.5] = 1.0
             total_predictions += y.shape[0] * y.shape[1]
-            correct_predictions += (pred == y).sum().item()
+            correct_predictions += (pred.long() == y.long()).sum().item()
 
             running_loss += loss.item()
 
@@ -159,8 +167,8 @@ def train(epoch, writer):
     return running_loss, acc, p, r, f1
 
 
-def validate():
-    global net, optimizer, criterion, val_loader
+def validate(loader):
+    global net, optimizer, criterion
     with torch.no_grad():
         net.eval()
 
@@ -169,17 +177,18 @@ def validate():
         correct_predictions = 0.0
         preds = []
 
-        for batch_idx, (x, seq_len, y) in enumerate(val_loader):
-            x, y = x.cuda(), y.cuda()
+        for batch_idx, (x, seq_len, y) in enumerate(loader):
+            x, y = x.cuda(), y.cuda().double()
             outputs = net(x, seq_len)
-
+            outputs = outputs.cuda().double()
+            y = y.cuda().double()
             loss = criterion(outputs, y).detach()
 
             pred = torch.zeros(outputs.shape).cuda()
             pred[outputs > 0.5] = 1.0
             preds += list(pred.cpu().numpy())
             total_predictions += y.shape[0] * y.shape[1]
-            correct_predictions += (pred == y).sum().item()
+            correct_predictions += (pred.long() == y.long()).sum().item()
 
             running_loss += loss.item()
 
@@ -194,10 +203,11 @@ def evaluate(p, r, f1, dataset):
     metrics = get_metrics_df()
     for i in range(metrics.shape[0]):
         metrics.iloc[i] = p[i], r[i], f1[i]
-    metrics.loc["micro_avg"] = np.average([p, r, f1], axis=1)
+    metrics.loc["micro_avg"] = np.mean(np.array([p, r, f1]) * dataset.proportion, axis=1)
+    metrics.loc["macro_avg"] = np.average([p, r, f1], axis=1)
     metrics = metrics.round(3)
-    metrics.to_csv("result/%s_%s.csv" % (model_stamp, dataset))
-
+    metrics.to_csv("result/%s_%s.csv" % (model_stamp, dataset.name))
+    return metrics
 
 def run_epochs():
     epoch = 0
@@ -226,7 +236,7 @@ def run_epochs():
             scheduler.step()
 
         train_loss, train_acc, train_p, train_r, train_f1 = train(epoch, writer)
-        val_loss, val_acc, val_p, val_r, val_f1, preds = validate()
+        val_loss, val_acc, val_p, val_r, val_f1, preds = validate(val_loader)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
@@ -246,10 +256,14 @@ def run_epochs():
                      }
             torch.save(state, '%s.pth' % model_stamp)
             # evaluate model
-            evaluate(train_p, train_r, train_f1, dataset="train")
-            evaluate(val_p, val_r, val_f1, dataset="val")
+            _ = evaluate(train_p, train_r, train_f1, dataset=train_dataset)
+            _ = evaluate(val_p, val_r, val_f1, dataset=val_dataset)
             np.save("result/%s_pred.npy" % model_stamp, np.array(preds))
-
+    print("predicting result on test dataset...")
+    test_loss, test_acc, test_p, test_r, test_f1, preds = validate(test_loader)
+    print("T:l:%.3f|acc:%.3f" % (test_loss, test_acc))
+    metrics = evaluate(test_p, test_r, test_f1, dataset=test_dataset)
+    print(metrics)
     writer.close()
 
 
@@ -267,7 +281,9 @@ if __name__ == '__main__':
     #     optimizer_centerloss = torch.optim.SGD(center_loss.parameters(), lr=0.5)
 
     global criterion, optimizer, scheduler
-    criterion = nn.BCELoss()  # Binary Cross Entropy loss with Sigmoid
+    # criterion = nn.BCELoss()  # Binary Cross Entropy loss with Sigmoid
+    class_weight = torch.from_numpy(1 / train_dataset.proportion).cuda().double()
+    criterion = nn.MultiLabelSoftMarginLoss(weight=class_weight)
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
 
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
