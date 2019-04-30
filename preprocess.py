@@ -85,6 +85,9 @@ if __name__ == '__main__':
     print("After oversampling")
     for i in range(len(MEDICINE_COL)):
     print(f'{MEDICINE_COL[i]}: {np.sum(y_train_oversampled[:,i] == 1) / len(y_train_oversampled)}\n')
+    # save x_train_oversampled
+    np.save(os.path.join(check_sys_path(), "train_idx.npy"), x_train_oversampled)
+    np.save(os.path.join(check_sys_path(), "train_label.npy"), y_train_oversampled)
 
     # save dict
     with open(os.path.join(check_sys_path(), "word_idx.txt"), "w") as f:
