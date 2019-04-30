@@ -63,8 +63,8 @@ if __name__ == '__main__':
     np.save(os.path.join(check_sys_path(), "val_label.npy"), np.array(df.loc[val_idx, MEDICINE_COL]))#.to_numpy())
 
     # save dict
-    with open(os.path.join(check_sys_path(), "word_idx.txt"), "w") as f:
+    with open(os.path.join(check_sys_path(), "word2idx.txt"), "w") as f:
         f.write("\n".join(["%s:%d" % (word, idx) for word, idx in word_idx.items()]))
-    with open(os.path.join(check_sys_path(), "med_idx.txt"), "w") as f:
+    with open(os.path.join(check_sys_path(), "med2idx.txt"), "w") as f:
         for idx, medicine in enumerate(MEDICINE_COL):
             f.write("%s:%s\n" % (medicine, idx))

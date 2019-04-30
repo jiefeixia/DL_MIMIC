@@ -2,6 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.utils.rnn as rnn
+import csv
+import pandas as pd
+import numpy as np
+from loader import *
+
+VOCAB_SIZE = IdxData.get_vacab_size()
 
 
 class PureCNN(nn.Module):
@@ -35,13 +41,13 @@ class NGramLanguageModeler(nn.Module):
     for training embedding layer
     """
 
-    def __init__(self, vocab_size, embedding_dim, context_size):
+    def __init__(self, embedding_dim, context_size):
         super(NGramLanguageModeler, self).__init__()
         self.embedding_dim = embedding_dim
         self.context_size = context_size
-        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.embeddings = nn.Embedding(VOCAB_SIZE, embedding_dim)
         self.linear1 = nn.Linear(context_size * embedding_dim, 128)
-        self.linear2 = nn.Linear(128, vocab_size)
+        self.linear2 = nn.Linear(128, VOCAB_SIZE)
 
     def forward(self, inputs):
         embeds = self.embeddings(inputs).view((-1, self.context_size * self.embedding_dim))
@@ -52,11 +58,11 @@ class NGramLanguageModeler(nn.Module):
 
 
 class CNN(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, num_classes):
+    def __init__(self, embedding_dim, num_classes):
         super(CNN, self).__init__()
         self.name = "Embed_CNN"
 
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.embedding = nn.Embedding(VOCAB_SIZE, embedding_dim)
         self.cnns = nn.ModuleList([nn.Sequential(nn.Conv1d(embedding_dim, 64, kernel),
                                                  nn.BatchNorm1d(64),
                                                  nn.ReLU())
@@ -81,11 +87,11 @@ class CNN(nn.Module):
 
 
 class LSTM(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_size, layers, dropout, num_classes):
+    def __init__(self, embedding_dim, hidden_size, layers, dropout, num_classes):
         super(LSTM, self).__init__()
         self.name = "LSTM"
 
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.embedding = nn.Embedding(VOCAB_SIZE, embedding_dim)
         self.lstm = nn.LSTM(input_size=embedding_dim,
                             hidden_size=hidden_size,
                             num_layers=layers,
@@ -99,17 +105,89 @@ class LSTM(nn.Module):
         self.fc = nn.Linear(64, num_classes)
 
     def forward(self, x, seq_len):
-        out = self.embedding(x)   # (B, padded seq Length, Embedding)
+        out = self.embedding(x)  # (B, padded seq Length, Embedding)
 
         out = rnn.pack_padded_sequence(out, seq_len, batch_first=True)
         out, _ = self.lstm(out)
-        out, seq_len = rnn.pad_packed_sequence(out, batch_first=True)   # (B, padded seq Length, Hidden)
+        out, seq_len = rnn.pad_packed_sequence(out, batch_first=True)  # (B, padded seq Length, Hidden)
 
         out = out.permute(0, 2, 1)  # (B, Hidden, padded seq Length)
         out = F.max_pool1d(out, out.shape[2])  # (B, Hidden, 1)
-        out = out.resize(out.shape[0], out.shape[1])   # (B, Hidden)
+        out = out.resize(out.shape[0], out.shape[1])  # (B, Hidden)
 
         out = F.relu(self.linear(out))
         out = self.dropout(out)
         out = self.fc(out)
         return out
+
+
+class HAS(nn.Module):
+    def __init__(self, word2vec_path, hidden_size, attention_size, num_classes):
+        super(HAS, self).__init__()
+
+        # load pre-trained embedding layer
+        dict = self.load_pretrained_embedding(word2vec_path)
+        self.embedding = nn.Embedding.from_pretrained(dict)
+        embed_dim = self.embedding.weight.shape[1]
+        self.word_att = AttGRU(input_size=embed_dim, hidden_size=hidden_size, att_size=attention_size)
+        self.sent_att = AttGRU(input_size=hidden_size, hidden_size=hidden_size, att_size=attention_size)
+
+        self.fc = nn.Linear(hidden_size, num_classes)
+
+    def load_pretrained_embedding(self, word2vec_path, word2idx_path="word2idx.txt"):
+        print("loading pretrained embedding weight...")
+        pre_trained = pd.read_csv(filepath_or_buffer=word2vec_path, header=False, sep=" ", quoting=csv.QUOTE_NONE)
+        word2idx = dict()
+        with open(word2idx_path) as f:
+            for l in f:
+                word, idx = l.strip().split(":")
+                word2idx[word] = int(idx)
+
+        embed_size = pre_trained.shape[1]
+        weight = np.zeros((VOCAB_SIZE, embed_size))
+        pre_trained["idx"] = pre_trained.iloc[:, 0].map(word2idx)
+        weight[pre_trained["idx"]] = pre_trained.iloc[:, 1:-1].values
+        return torch.from_numpy(weight)
+
+    def forward(self, x, x_len):
+        word_vec = self.embedding(x)
+        sent_vec, word_att_weight = self.word_att(word_vec)
+        doc_vec, sent_att_weight = self.sent_att(sent_vec)
+        out = self.fc(doc_vec)
+        return out, word_att_weight, sent_att_weight
+
+
+class AttGRU(nn.Module):
+    def __init__(self, input_size, hidden_size, att_size):
+        super(AttGRU, self).__init__()
+        self.gru = nn.GRU(input_size, hidden_size, bidirectional=True, batch_first=True)
+        self.key_fc = nn.Linear(hidden_size * 2, att_size)
+        # query is a fixed vector storing the information "which is the important information in the value"
+        self.query = nn.Parameter(torch.empty(att_size))
+        torch.nn.init.xavier_normal_(self.query)
+
+    def forward(self, x):
+        h, h_n = self.gru(x)  # both key and value in attention is h
+
+        batch_size, padded_len, hidden_size = h.shape
+        h = h.view(batch_size * padded_len, hidden_size)  # h(N*L, H)
+        key = F.tanh(self.key_fc(h))  # key(N*L, A)
+        key = key.view(batch_size, padded_len, -1)  # h(N, L, A)
+
+        energy = key * self.query  # (N, L)
+        att_weight = F.softmax(energy, dim=1)
+
+        context = torch.bmm(att_weight, h)  # (N, H)
+
+        return context, att_weight
+
+
+if __name__ == '__main__':
+    # for debug
+
+    x = torch.randint(0, 3000, (200, 1000)).cuda()
+    net = HAS("glove.6B.50d.txt", 512, 128, 8)
+    net = net.cuda()
+
+    out, word_aw, sent_aw = net(x)
+    print(out)
