@@ -62,6 +62,30 @@ if __name__ == '__main__':
     np.save(os.path.join(check_sys_path(), "val_idx.npy"), admission_notes_idx[val_idx])
     np.save(os.path.join(check_sys_path(), "val_label.npy"), np.array(df.loc[val_idx, MEDICINE_COL]))#.to_numpy())
 
+    # random oversample
+    x_train = np.load(os.path.join(check_sys_path(), "train_idx.npy")
+    y_train = np.load(os.path.join(check_sys_path(), "train_label.npy")
+    # oversample lowest 3 drugs
+    minority_indices = np.where(y_train[:,5:] == 1)[0]
+    num_minority_instances = np.sum(y_train[:,5:] == 1)
+    train_length = len(y_train)
+    num_samples = 2000
+    # sample from minority indices num_samples times with replacement
+    y_trainn = list(y_train)
+    x_trainn = list(x_train)
+    for idx, i in enumerate(range(num_samples)):
+        random_sample = np.random.randint(0,num_minority_instances)
+        index_to_add = minority_indices[random_sample]
+        y_trainn.append(y_trainn[index_to_add])
+        x_trainn.append(x_trainn[index_to_add])
+
+    y_train_oversampled = np.array(y_trainn)
+    x_train_oversampled = np.array(x_trainn)
+
+    print("After oversampling")
+    for i in range(len(MEDICINE_COL)):
+    print(f'{MEDICINE_COL[i]}: {np.sum(y_train_oversampled[:,i] == 1) / len(y_train_oversampled)}\n')
+
     # save dict
     with open(os.path.join(check_sys_path(), "word_idx.txt"), "w") as f:
         f.write("\n".join(["%s:%d" % (word, idx) for word, idx in word_idx.items()]))
