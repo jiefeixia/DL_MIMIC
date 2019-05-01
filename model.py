@@ -136,7 +136,7 @@ class HAS(nn.Module):
 
     def load_pretrained_embedding(self, word2vec_path, word2idx_path="word2idx.txt"):
         print("loading pretrained embedding weight...")
-        pre_trained = pd.read_csv(filepath_or_buffer=word2vec_path, header=False, sep=" ", quoting=csv.QUOTE_NONE)
+        pre_trained = pd.read_csv(filepath_or_buffer=word2vec_path, header=None, sep=" ", quoting=csv.QUOTE_NONE)
         word2idx = dict()
         with open(word2idx_path) as f:
             for l in f:
@@ -146,6 +146,8 @@ class HAS(nn.Module):
         embed_size = pre_trained.shape[1]
         weight = np.zeros((VOCAB_SIZE, embed_size))
         pre_trained["idx"] = pre_trained.iloc[:, 0].map(word2idx)
+        pre_trained["idx"] = pre_trained["idx"].fillna(-1).astype("int")
+        pre_trained = pre_trained[pre_trained["idx"] > 0]
         weight[pre_trained["idx"]] = pre_trained.iloc[:, 1:-1].values
         return torch.from_numpy(weight)
 

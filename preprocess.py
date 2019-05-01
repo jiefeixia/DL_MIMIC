@@ -5,6 +5,7 @@ from tqdm import tqdm
 from loader import check_sys_path
 from sklearn.feature_extraction.text import CountVectorizer
 import argparse
+import re
 
 NOTES_COL = ["allergy", "chief complaint", "history of present illness", "past medical history", "past procedure",
              "social history", "family history", "initial exam", "admission medications", "pertinent results"]
@@ -12,8 +13,8 @@ MEDICINE_COL = ["metoprolol", "furosemide", "lisinopril", "amlodipine", "atenolo
                 "carvedilol"]
 
 parser = argparse.ArgumentParser(description='embedding model')
-parser.add_argument('--min_freq', default=10, type=int, help='learning rate')#wrong descriptions?
-parser.add_argument('--max_df', default=0.8, type=float, help='batch size')#wrong descriptions?
+parser.add_argument('--min_freq', default=10, type=int, help='learning rate')  # wrong descriptions?
+parser.add_argument('--max_df', default=0.8, type=float, help='batch size')  # wrong descriptions?
 args = parser.parse_args()
 
 if __name__ == '__main__':
@@ -25,46 +26,55 @@ if __name__ == '__main__':
     print("random splitting data into training and validation data set...")
     random_idx = np.random.permutation(np.arange(df.shape[0]))
     train_idx = random_idx[0:int(0.8 * len(random_idx))]  # select first 80% as training data
-    val_idx = random_idx[int(0.8 * len(random_idx)):-1]  # random select 20% as validation data
+    val_idx = random_idx[int(0.8 * len(random_idx)):int(0.9 * len(random_idx))]  # random select 10% as validation data
+    test_idx = random_idx[int(0.9 * len(random_idx)):-1]  # random select 10% as test data
 
-    discharge_notes = df["discharge_notes"][train_idx].fillna("").tolist()
-    admission_notes = df["admission_notes"].fillna("").tolist()
     # calculate relative freq for each label
     print("relative freq for each label in training data")
     medicines = list(df.iloc[train_idx, -8:].columns)
-    freq = df.iloc[train_idx, -8:].sum()/train_idx.shape[0]
+    freq = df.iloc[train_idx, -8:].sum() / train_idx.shape[0]
     for i, medicine in enumerate(medicines):
         print("%20s:%.2f" % (medicine, freq[i]))
 
     # train nlp model
     print("training nlp model...")
+
+    # discharge_notes = df["discharge_notes"][train_idx].fillna("").tolist()
+    admission_notes = df["admission_notes"].fillna("").tolist()
+    for i in range(len(admission_notes)):
+        admission_notes[i] = re.sub("\d+", " NUM ", admission_notes[i])
+        admission_notes[i] = re.sub("_", " ", admission_notes[i])
+
     vectorizer = CountVectorizer(min_df=args.min_freq,
                                  stop_words="english",
                                  max_df=args.max_df)
-    vectorizer.fit(discharge_notes)
+    vectorizer.fit(admission_notes)
+    # vectorizer.fit(discharge_notes)
 
-    word_idx = vectorizer.vocabulary_
-    idx_word = {idx: word for word, idx in word_idx.items()}
-    vocab = word_idx.keys()
+    word2idx = vectorizer.vocabulary_
+    idx2word = {idx: word for word, idx in word2idx.items()}
+    vocab = word2idx.keys()
     freq_stop_words = vectorizer.stop_words_
     tokenizer = vectorizer.build_tokenizer()
 
     # transform word to idx
     print("transforming word to idx...")
-    discharge_notes_idx = np.array([np.array([word_idx[token] for token in tokenizer(note) if token in vocab])
-                                    for note in tqdm(discharge_notes)])
-    admission_notes_idx = np.array([np.array([word_idx[token] for token in tokenizer(note) if token in vocab])
+    # discharge_notes_idx = np.array([np.array([word2idx[token] for token in tokenizer(note) if token in vocab])
+    #                                 for note in tqdm(discharge_notes)])
+    admission_notes_idx = np.array([np.array([word2idx[token] for token in tokenizer(note) if token in vocab])
                                     for note in admission_notes])
 
-    np.save(os.path.join(check_sys_path(), "embedding_train_idx.npy"), discharge_notes_idx)
+    # np.save(os.path.join(check_sys_path(), "embedding_train_idx.npy"), discharge_notes_idx)
     np.save(os.path.join(check_sys_path(), "train_idx.npy"), admission_notes_idx[train_idx])
-    np.save(os.path.join(check_sys_path(), "train_label.npy"), np.array(df.loc[train_idx, MEDICINE_COL]))#.to_numpy())
+    np.save(os.path.join(check_sys_path(), "train_label.npy"), np.array(df.loc[train_idx, MEDICINE_COL]))
     np.save(os.path.join(check_sys_path(), "val_idx.npy"), admission_notes_idx[val_idx])
-    np.save(os.path.join(check_sys_path(), "val_label.npy"), np.array(df.loc[val_idx, MEDICINE_COL]))#.to_numpy())
+    np.save(os.path.join(check_sys_path(), "val_label.npy"), np.array(df.loc[val_idx, MEDICINE_COL]))
+    np.save(os.path.join(check_sys_path(), "test_idx.npy"), admission_notes_idx[test_idx])
+    np.save(os.path.join(check_sys_path(), "test_label.npy"), np.array(df.loc[test_idx, MEDICINE_COL]))
 
     # save dict
     with open(os.path.join(check_sys_path(), "word2idx.txt"), "w") as f:
-        f.write("\n".join(["%s:%d" % (word, idx) for word, idx in word_idx.items()]))
+        f.write("\n".join(["%s:%d" % (word, idx) for word, idx in word2idx.items()]))
     with open(os.path.join(check_sys_path(), "med2idx.txt"), "w") as f:
         for idx, medicine in enumerate(MEDICINE_COL):
             f.write("%s:%s\n" % (medicine, idx))
