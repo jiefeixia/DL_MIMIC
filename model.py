@@ -10,6 +10,25 @@ from loader import *
 VOCAB_SIZE = IdxData.get_vacab_size()
 
 
+def load_pretrained_embedding(word2vec_path, word2idx_path="word2idx.txt"):
+    """load pre trained word embedding vector"""
+    print("loading pretrained embedding weight...")
+    pre_trained = pd.read_csv(filepath_or_buffer=word2vec_path, header=None, sep=" ", quoting=csv.QUOTE_NONE)
+    word2idx = dict()
+    with open(word2idx_path) as f:
+        for l in f:
+            word, idx = l.strip().split(":")
+            word2idx[word] = int(idx)
+
+    embed_size = pre_trained.shape[1] - 1
+    weight = np.zeros((VOCAB_SIZE, embed_size))
+    pre_trained["idx"] = pre_trained.iloc[:, 0].map(word2idx)
+    pre_trained["idx"] = pre_trained["idx"].fillna(-1).astype("int")
+    pre_trained = pre_trained[pre_trained["idx"] > 0]
+    weight[pre_trained["idx"]] = pre_trained.iloc[:, 1:-1].values
+    return torch.from_numpy(weight)
+
+
 class PureCNN(nn.Module):
     def __init__(self, embedding_dim, num_classes):
         super(PureCNN, self).__init__()
@@ -121,9 +140,9 @@ class LSTM(nn.Module):
         return out
 
 
-class HAS(nn.Module):
+class HAN(nn.Module):
     def __init__(self, word2vec_path, hidden_size, attention_size, num_classes):
-        super(HAS, self).__init__()
+        super(HAN, self).__init__()
 
         # load pre-trained embedding layer
         dict = self.load_pretrained_embedding(word2vec_path)
@@ -134,29 +153,30 @@ class HAS(nn.Module):
 
         self.fc = nn.Linear(hidden_size, num_classes)
 
-    def load_pretrained_embedding(self, word2vec_path, word2idx_path="word2idx.txt"):
-        print("loading pretrained embedding weight...")
-        pre_trained = pd.read_csv(filepath_or_buffer=word2vec_path, header=None, sep=" ", quoting=csv.QUOTE_NONE)
-        word2idx = dict()
-        with open(word2idx_path) as f:
-            for l in f:
-                word, idx = l.strip().split(":")
-                word2idx[word] = int(idx)
+    def forward(self, docs):
+        """
+        N stands for batch size,
+        S stands for num of sentences per document, it is padded per batch
+        W stands for num of words per sentence, it is padded per document
+        :param: docs: list(padded S, ), inside is sent: tensor(N, W)
+        :return:  out, word_att_weights (N, S, W), sent_att_weight (N, S)
+        """
+        docs = x.permute(1, 0, 2)  # x (S, N, W)
 
-        embed_size = pre_trained.shape[1]
-        weight = np.zeros((VOCAB_SIZE, embed_size))
-        pre_trained["idx"] = pre_trained.iloc[:, 0].map(word2idx)
-        pre_trained["idx"] = pre_trained["idx"].fillna(-1).astype("int")
-        pre_trained = pre_trained[pre_trained["idx"] > 0]
-        weight[pre_trained["idx"]] = pre_trained.iloc[:, 1:-1].values
-        return torch.from_numpy(weight)
+        sent_vecs = []
+        word_att_weights = []
+        for i, sent in enumerate(x):  # sent (N, W)
+            word_vec = self.embedding(sent)  # sent (N, L, D)
+            sent_vec, word_att_weight = self.word_att(word_vec)  # sent_vec (N, H), word_att_weight (N, W)
+            sent_vecs.append(sent_vec)
+            word_att_weights.append(word_att_weight)
 
-    def forward(self, x, x_len):
-        word_vec = self.embedding(x)
-        sent_vec, word_att_weight = self.word_att(word_vec)
-        doc_vec, sent_att_weight = self.sent_att(sent_vec)
+        word_att_weights = torch.stack(word_att_weights).premute(1, 0, 2)  # word_att_weight (N, S, L)
+        sent_vecs = torch.stack(sent_vecs).premute(1, 0, 2)  # sent_vecs (N, S, H)
+
+        doc_vec, sent_att_weight = self.sent_att(sent_vecs)  # doc_vec (N, H)
         out = self.fc(doc_vec)
-        return out, word_att_weight, sent_att_weight
+        return out, word_att_weights, sent_att_weight
 
 
 class AttGRU(nn.Module):
@@ -164,20 +184,24 @@ class AttGRU(nn.Module):
         super(AttGRU, self).__init__()
         self.gru = nn.GRU(input_size, hidden_size, bidirectional=True, batch_first=True)
         self.key_fc = nn.Linear(hidden_size * 2, att_size)
+
         # query is a fixed vector storing the information "which is the important information in the value"
-        self.query = nn.Parameter(torch.empty(att_size))
+        self.query = nn.Parameter(torch.empty(att_size))  # query (A)
         torch.nn.init.xavier_normal_(self.query)
 
     def forward(self, x):
-        h, h_n = self.gru(x)  # both key and value in attention is h
+        h, h_n = self.gru(x)  # both key and value of attention are h
 
         batch_size, padded_len, hidden_size = h.shape
-        h = h.view(batch_size * padded_len, hidden_size)  # h(N*L, H)
-        key = F.tanh(self.key_fc(h))  # key(N*L, A)
-        key = key.view(batch_size, padded_len, -1)  # h(N, L, A)
+        key = h.view(batch_size * padded_len, hidden_size)  # key (N*L, H)
+        key = F.tanh(self.key_fc(key))  # key (N*L, A)
+        key = key.view(batch_size, padded_len, -1)  # h (N, L, A)
 
-        energy = key * self.query  # (N, L)
-        att_weight = F.softmax(energy, dim=1)
+        query = self.query.repeat(batch_size, 1).unsqueeze(2)  # query (N, A, 1)
+        energy = torch.bmm(key, query)  # energy (N, L, 1)
+        energy = energy.squeeze(2)  # energy (N, L, 1)
+        att_weight = F.softmax(energy, dim=1)  # att_weight (N, L)
+        # for simplicity, ignore the mask for different length
 
         context = torch.bmm(att_weight, h)  # (N, H)
 
@@ -188,7 +212,7 @@ if __name__ == '__main__':
     # for debug
 
     x = torch.randint(0, 3000, (200, 1000)).cuda()
-    net = HAS("glove.6B.50d.txt", 512, 128, 8)
+    net = HAN("glove.6B.50d.txt", 512, 128, 8)
     net = net.cuda()
 
     out, word_aw, sent_aw = net(x)
