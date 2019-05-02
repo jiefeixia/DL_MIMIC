@@ -36,15 +36,17 @@ if __name__ == '__main__':
     for i, medicine in enumerate(medicines):
         print("%20s:%.2f" % (medicine, freq[i]))
 
-    # train nlp model
-    print("training nlp model...")
-
+    print("cleaning word...")
     # discharge_notes = df["discharge_notes"][train_idx].fillna("").tolist()
     admission_notes = df["admission_notes"].fillna("").tolist()
     for i in range(len(admission_notes)):
-        admission_notes[i] = re.sub("\d+", " NUM ", admission_notes[i])
+        admission_notes[i] = re.sub(r"\d\. ", " ordernum ", admission_notes[i])
+        admission_notes[i] = re.sub(r"\d\d:\d\d", " hourtime ", admission_notes[i])
+        admission_notes[i] = re.sub(r"\d+", " num ", admission_notes[i])
         admission_notes[i] = re.sub("_", " ", admission_notes[i])
+        admission_notes[i] = re.sub(r"\. ", " eos ", admission_notes[i])
 
+    print("training nlp model...")
     vectorizer = CountVectorizer(min_df=args.min_freq,
                                  stop_words="english",
                                  max_df=args.max_df)
@@ -52,8 +54,14 @@ if __name__ == '__main__':
     # vectorizer.fit(discharge_notes)
 
     word2idx = vectorizer.vocabulary_
-    idx2word = {idx: word for word, idx in word2idx.items()}
+    idx2word = [word for word, idx in word2idx.items()]
     vocab = word2idx.keys()
+    # reserve 0 for padding value
+    idx2word.append(idx2word[0])
+    word2idx[idx2word[0]] = len(word2idx) + 1
+    idx2word[0] = " "
+    word2idx[" "] = 0
+
     freq_stop_words = vectorizer.stop_words_
     tokenizer = vectorizer.build_tokenizer()
 
