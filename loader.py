@@ -132,21 +132,6 @@ def get_metrics_df():
     return df
 
 
-def collate(batch):
-    """
-    :param batch: [(X(len), y(classes)) * batch_size]
-    :return: [X(padded_len, batch_size, in chan), y(sum(len)]
-    """
-    X, y = zip(*batch)
-    seq_len = torch.tensor([x.shape[0] for x in X])
-    sorted_input_len, sorted_idx = seq_len.sort(descending=True)
-    X = [torch.from_numpy(X[i]) for i in sorted_idx]
-    y = [y[i] for i in sorted_idx]
-    y = torch.from_numpy(np.array(y))
-    X = rnn.pad_sequence(X, batch_first=True)
-    return X.long(), sorted_input_len, y.float()
-
-
 if __name__ == '__main__':
     data = Data("validation")
     data.__getitem__(100)
