@@ -131,6 +131,11 @@ def get_metrics_df():
     df.index = medicines
     return df
 
+word2idx = dict()
+with open(os.path.join(check_sys_path(), "word2idx.txt")) as f:
+    for line in f:
+        word, idx = line.strip().split(":")
+        word2idx[word] = int(idx)
 
 if __name__ == '__main__':
     data = Data("validation")

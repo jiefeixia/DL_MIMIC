@@ -34,41 +34,35 @@ parser.add_argument('--epoch', "-e", default=10, type=int, help='max epoch')
 parser.add_argument('--predict', "-p", type=str, help='list metrics of the model')
 args = parser.parse_args()
 
-if args.model == "HAN":
-    net = HAN()
-else:
-    print("no specific model")
-    sys.exit(0)
 
-if args.resume:
-    print("loading exist model from %s" % args.resume)
-    check_point = torch.load(args.resume)
-    net.load_state_dict(check_point["net"])
-    model_stamp = args.resume[:-4]
-else:
-    t = time.localtime()
-    model_stamp = "%s_%d_%.2d_%.2d" % (args.model, t.tm_mday, t.tm_hour, t.tm_min)
+def init():
+    global net, model_stamp
+    if args.model == "HAN":
+        net = HAN(hidden_size=128,
+                  attention_size=64,
+                  num_classes=8)
+    else:
+        print("no specific model")
+        sys.exit(0)
 
+    if args.resume:
+        print("loading exist model from %s" % args.resume)
+        check_point = torch.load(args.resume)
+        net.load_state_dict(check_point["net"])
+        model_stamp = args.resume[:-4]
+    else:
+        t = time.localtime()
+        model_stamp = "%s_%d_%.2d_%.2d" % (args.model, t.tm_mday, t.tm_hour, t.tm_min)
 
-def xavier(m):
-    if type(m) == nn.Linear or type(m) == nn.Conv2d:
-        torch.nn.init.xavier_normal_(m.weight.data)
+    if args.init_xavier:
+        for name, param in net.named_parameters():
+            if 'weight' in name and "embedding" not in name:
+                torch.nn.init.normal_(param, -0.1, 0.1)
 
+    net = net.cuda()
 
-if args.init_xavier:
-    net.apply(xavier)
+    print("initializing " + model_stamp)
 
-net = net.cuda()
-
-word2idx = dict()
-with open(os.path.join(check_sys_path(), "word2idx.txt")) as f:
-    for line in f:
-        word, idx = line.strip().split(":")
-        word2idx[word] = int(idx)
-
-EOS_IDX = word2idx["eos"]
-
-print("initializing " + model_stamp)
 
 """###################################  data loader  ###################################"""
 
@@ -81,15 +75,16 @@ def collate(batch):
     :param batch: batch (N, 1)
     :return: docs: list(padded S, ), inside is sent: tensor(N, W)
     :return: word_nums: list(N, ), inside is word_num: list (unpadded S, W)
-    :return: y(N, S)
+    :return: y(N, C)
     """
+
     X, y = zip(*batch)
 
     docs = []
     word_nums = []
     max_sent_num = 0
     for batch in X:  # loop per document (batch)
-        end_indices = (batch == EOS_IDX).nonzero()
+        end_indices = (batch == word2idx["eos"]).nonzero()[0]
         sents = []
         word_num = []
         start = 0
@@ -111,7 +106,11 @@ def collate(batch):
 
         if max_sent_num < sent_num:
             max_sent_num = sent_num
-        doc = rnn.pad_sequence(sents).cuda()  # pad word num per document
+        try:
+            doc = rnn.pad_sequence(sents)  # pad word num per document
+        except IndexError:  # TODO: why there are zero len sentence?
+            print(sent_num)
+            y = np.delete(y, i, axis=0)
         docs.append(doc)
         word_nums.append(word_num)
 
@@ -119,16 +118,16 @@ def collate(batch):
     for i, doc in enumerate(docs):
         if doc.shape[0] < max_sent_num:
             sent_num, padded_word_num = doc.shape
-            docs[i] = torch.cat((docs[i], torch.zeros(max_sent_num - sent_num, padded_word_num)), dim=0)
+            docs[i] = torch.cat((docs[i], torch.zeros(max_sent_num - sent_num, padded_word_num).int()), dim=0)
 
     # move num of sentences to the first dimension
     docs_s_first = []
     for i in range(max_sent_num):
-        docs_s_first.append(torch.cat([doc[i, :] for doc in docs]).long().cuda())
+        docs_s_first.append(torch.cat([doc[i, :] for doc in docs]).cuda().long())
 
     y = torch.from_numpy(np.array(y)).float()
 
-    return docs, word_nums, y
+    return docs_s_first, word_nums, y
 
 
 def data_loader():
@@ -138,7 +137,7 @@ def data_loader():
     test_dataset = Data("test")
     test_loader = DataLoader(test_dataset,
                              batch_size=args.batch_size,
-                             num_workers=8,
+                             num_workers=1 if args.debug else 6,
                              shuffle=False,
                              collate_fn=collate)
 
@@ -154,13 +153,13 @@ def data_loader():
 
     val_loader = DataLoader(val_dataset,
                             batch_size=args.batch_size,
-                            num_workers=8,
+                            num_workers=1 if args.debug else 6,
                             shuffle=True,
                             collate_fn=collate)
 
     train_loader = DataLoader(train_dataset,
                               batch_size=args.batch_size,
-                              num_workers=8,
+                              num_workers=1 if args.debug else 6,
                               shuffle=True,
                               collate_fn=collate)
 
@@ -185,7 +184,7 @@ def train(epoch, writer):
             y = y.cuda()
             optimizer.zero_grad()
 
-            outputs = net(x, seq_len)
+            outputs = net(x)
 
             loss = criterion(outputs, y)
             loss.backward()
@@ -231,7 +230,7 @@ def validate(loader):
 
         for batch_idx, (x, seq_len, y) in enumerate(loader):
             y = y.cuda()
-            outputs = net(x, seq_len)
+            outputs = net(x)
 
             loss = criterion(outputs, y).detach()
 
@@ -319,12 +318,9 @@ def run_epochs():
 
 """###################################  main  ###################################"""
 if __name__ == '__main__':
+    torch.multiprocessing.freeze_support()
+    init()
     data_loader()  # return train and test dataset to produce prediction
-
-    # if isinstance(net, CenterResNet):
-    #     global optimizer_centerloss, center_loss
-    #     center_loss = CenterLoss(num_classes=2300, feat_dim=512) 
-    #     optimizer_centerloss = torch.optim.SGD(center_loss.parameters(), lr=0.5)
 
     global criterion, optimizer, scheduler
     # criterion = nn.BCELoss()  # Binary Cross Entropy loss with Sigmoid

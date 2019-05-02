@@ -38,7 +38,7 @@ if __name__ == '__main__':
 
     print("cleaning word...")
     # discharge_notes = df["discharge_notes"][train_idx].fillna("").tolist()
-    admission_notes = df["admission_notes"].fillna("").tolist()
+    admission_notes = df["admission_notes"].dropna().tolist()
     for i in range(len(admission_notes)):
         admission_notes[i] = re.sub(r"\d\. ", " ordernum ", admission_notes[i])
         admission_notes[i] = re.sub(r"\d\d:\d\d", " hourtime ", admission_notes[i])

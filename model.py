@@ -141,13 +141,18 @@ class LSTM(nn.Module):
 
 
 class HAN(nn.Module):
-    def __init__(self, word2vec_path, hidden_size, attention_size, num_classes):
+    def __init__(self, hidden_size, attention_size, num_classes,
+                 word2vec_path=os.path.join(check_sys_path(),"glove.6B.50d.txt")):
         super(HAN, self).__init__()
 
         # load pre-trained embedding layer
-        dict = self.load_pretrained_embedding(word2vec_path)
-        self.embedding = nn.Embedding.from_pretrained(dict)
-        embed_dim = self.embedding.weight.shape[1]
+        # pretrained_weight = load_pretrained_embedding(word2vec_path)
+        # self.embedding = nn.Embedding.from_pretrained(pretrained_weight)
+
+        # embed_dim = self.embedding.weight.shape[1]
+        embed_dim = 128
+        self.embedding = nn.Embedding(VOCAB_SIZE, embed_dim)
+
         self.word_att = AttGRU(input_size=embed_dim, hidden_size=hidden_size, att_size=attention_size)
         self.sent_att = AttGRU(input_size=hidden_size, hidden_size=hidden_size, att_size=attention_size)
 
@@ -159,13 +164,11 @@ class HAN(nn.Module):
         S stands for num of sentences per document, it is padded per batch
         W stands for num of words per sentence, it is padded per document
         :param: docs: list(padded S, ), inside is sent: tensor(N, W)
-        :return:  out, word_att_weights (N, S, W), sent_att_weight (N, S)
+        :return: out, word_att_weights (N, S, W), sent_att_weight (N, S)
         """
-        docs = x.permute(1, 0, 2)  # x (S, N, W)
-
         sent_vecs = []
         word_att_weights = []
-        for i, sent in enumerate(x):  # sent (N, W)
+        for i, sent in enumerate(docs):  # sent (N, W)
             word_vec = self.embedding(sent)  # sent (N, L, D)
             sent_vec, word_att_weight = self.word_att(word_vec)  # sent_vec (N, H), word_att_weight (N, W)
             sent_vecs.append(sent_vec)
@@ -187,7 +190,7 @@ class AttGRU(nn.Module):
 
         # query is a fixed vector storing the information "which is the important information in the value"
         self.query = nn.Parameter(torch.empty(att_size))  # query (A)
-        torch.nn.init.xavier_normal_(self.query)
+        torch.nn.init.normal_(self.query)
 
     def forward(self, x):
         h, h_n = self.gru(x)  # both key and value of attention are h
