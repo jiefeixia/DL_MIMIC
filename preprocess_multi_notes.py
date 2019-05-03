@@ -61,11 +61,11 @@ if __name__ == '__main__':
     df = df.sample(frac=1).reset_index(drop=True)
 
     def save(file, idx, label):
-        file.write(label + "\n")
+        file.write("---" + label + "---\n")
         freq = df.loc[idx, MEDICINE_COL].sum() / len(idx)
         for i, med in enumerate(MEDICINE_COL):
             f.write("%s:%.2f(%d)\n" % (med, freq[i], df[med][idx].sum()))
-        f.write("total#: %d" % len(idx))
+        f.write("total#: %d\n" % len(idx))
 
         df.loc[idx, NOTES_COL].to_csv("%s_idx.csv" % label, index=False)
         df.loc[idx, MEDICINE_COL].to_csv("%s_label.csv" % label, index=False)
