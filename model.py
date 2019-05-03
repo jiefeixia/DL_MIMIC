@@ -150,6 +150,7 @@ class HAN(nn.Module):
         # self.embedding = nn.Embedding.from_pretrained(pretrained_weight)
 
         # embed_dim = self.embedding.weight.shape[1]
+        # TODO: load pre trained weight
         embed_dim = 128
         self.embedding = nn.Embedding(VOCAB_SIZE, embed_dim)
 
@@ -168,7 +169,7 @@ class HAN(nn.Module):
         """
         sent_vecs = []
         word_att_weights = []
-        for i, sent in enumerate(docs):  # sent (N, W)
+        for i, sent in enumerate(docs):  # loop throught per sentence in a batch of documents to get sentence (N, W)
             word_vec = self.embedding(sent)  # sent (N, L, D)
             sent_vec, word_att_weight = self.word_att(word_vec)  # sent_vec (N, H), word_att_weight (N, W)
             sent_vecs.append(sent_vec)
@@ -214,8 +215,8 @@ class AttGRU(nn.Module):
 if __name__ == '__main__':
     # for debug
 
-    x = torch.randint(0, 3000, (200, 1000)).cuda()
-    net = HAN("glove.6B.50d.txt", 512, 128, 8)
+    x = [torch.randint(0, 300, (128, i)).cuda() for i in [100, 110, 120]]
+    net = HAN(512, 128, 8)
     net = net.cuda()
 
     out, word_aw, sent_aw = net(x)

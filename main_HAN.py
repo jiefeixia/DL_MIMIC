@@ -70,11 +70,11 @@ def init():
 def collate(batch):
     """
     N stands for batch size,
-    S stands for num of sentences per document, if padded then it is padded per batch
-    W stands for num of words per sentence, if padded then it is padded per document
+    S stands for num of sentences per document, it is padded per batch
+    W stands for num of words per sentence, it is padded per sentence batch
     :param batch: batch (N, 1)
-    :return: docs: list(padded S, ), inside is sent: tensor(N, W)
-    :return: word_nums: list(N, ), inside is word_num: list (unpadded S, W)
+    :return: docs: list(S, ), inside is sentence batch: tensor(N, W)
+    :return: word_nums: list(N, ), inside is word_num: list (unpadded S, unpadded W)
     :return: y(N, C)
     """
 
@@ -90,15 +90,15 @@ def collate(batch):
         start = 0
         sent_num = 0
         for i, end in enumerate(end_indices):  # loop per sentence
-            if end - start > 5:
+            if end - start > 3:
                 sents.append(torch.from_numpy(batch[start:end]))
                 word_num.append(end - start)
                 sent_num += 1
-            else:  # if less than five word per sentence, then concatenate it with the last sentense
+            else:  # if less than three word per sentence, then concatenate it with the last sentence
                 try:
                     sents[i - 1] = torch.cat((sents[i - 1], torch.from_numpy(batch[start:end])))
                     word_num[i - 1] += end - start
-                except IndexError:  # except for first sentence is less than five words
+                except IndexError:  # except for first sentence is less than three words
                     sents.append(torch.from_numpy(batch[start:end]))
                     word_num.append(end - start)
                     sent_num += 1
@@ -106,24 +106,19 @@ def collate(batch):
 
         if max_sent_num < sent_num:
             max_sent_num = sent_num
-        try:
-            doc = rnn.pad_sequence(sents)  # pad word num per document
-        except IndexError:  # TODO: why there are zero len sentence?
-            print(sent_num)
-            y = np.delete(y, i, axis=0)
-        docs.append(doc)
+        docs.append(sents)
         word_nums.append(word_num)
-
-    # pad num of sentences for every documents in a batch
-    for i, doc in enumerate(docs):
-        if doc.shape[0] < max_sent_num:
-            sent_num, padded_word_num = doc.shape
-            docs[i] = torch.cat((docs[i], torch.zeros(max_sent_num - sent_num, padded_word_num).int()), dim=0)
 
     # move num of sentences to the first dimension
     docs_s_first = []
     for i in range(max_sent_num):
-        docs_s_first.append(torch.cat([doc[i, :] for doc in docs]).cuda().long())
+        batch_sent = []
+        for sents in docs:
+            if len(sents) > i:
+                batch_sent.append(sents[i])
+            else:
+                batch_sent.append(torch.zeros(1).long())
+        docs_s_first.append(rnn.pad_sequence(batch_sent, batch_first=True).cuda().long())
 
     y = torch.from_numpy(np.array(y)).float()
 
@@ -137,7 +132,7 @@ def data_loader():
     test_dataset = Data("test")
     test_loader = DataLoader(test_dataset,
                              batch_size=args.batch_size,
-                             num_workers=1 if args.debug else 6,
+                             # num_workers=1 if args.debug else 6,
                              shuffle=False,
                              collate_fn=collate)
 
@@ -153,13 +148,13 @@ def data_loader():
 
     val_loader = DataLoader(val_dataset,
                             batch_size=args.batch_size,
-                            num_workers=1 if args.debug else 6,
+                            # num_workers=1 if args.debug else 6,
                             shuffle=True,
                             collate_fn=collate)
 
     train_loader = DataLoader(train_dataset,
                               batch_size=args.batch_size,
-                              num_workers=1 if args.debug else 6,
+                              # num_workers=1 if args.debug else 6,
                               shuffle=True,
                               collate_fn=collate)
 
