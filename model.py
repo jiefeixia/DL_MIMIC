@@ -5,9 +5,8 @@ import torch.nn.utils.rnn as rnn
 import csv
 import pandas as pd
 import numpy as np
-from loader import *
-
-VOCAB_SIZE = IdxData.get_vacab_size()
+import os
+from loader import word2idx, check_sys_path
 
 
 def load_pretrained_embedding(word2vec_path, word2idx_path="word2idx.txt"):
@@ -21,7 +20,7 @@ def load_pretrained_embedding(word2vec_path, word2idx_path="word2idx.txt"):
             word2idx[word] = int(idx)
 
     embed_size = pre_trained.shape[1] - 1
-    weight = np.zeros((VOCAB_SIZE, embed_size))
+    weight = np.zeros((len(word2idx), embed_size))
     pre_trained["idx"] = pre_trained.iloc[:, 0].map(word2idx)
     pre_trained["idx"] = pre_trained["idx"].fillna(-1).astype("int")
     pre_trained = pre_trained[pre_trained["idx"] > 0]
@@ -64,9 +63,9 @@ class NGramLanguageModeler(nn.Module):
         super(NGramLanguageModeler, self).__init__()
         self.embedding_dim = embedding_dim
         self.context_size = context_size
-        self.embeddings = nn.Embedding(VOCAB_SIZE, embedding_dim)
+        self.embeddings = nn.Embedding(len(word2idx), embedding_dim)
         self.linear1 = nn.Linear(context_size * embedding_dim, 128)
-        self.linear2 = nn.Linear(128, VOCAB_SIZE)
+        self.linear2 = nn.Linear(128, len(word2idx))
 
     def forward(self, inputs):
         embeds = self.embeddings(inputs).view((-1, self.context_size * self.embedding_dim))
@@ -81,7 +80,7 @@ class CNN(nn.Module):
         super(CNN, self).__init__()
         self.name = "Embed_CNN"
 
-        self.embedding = nn.Embedding(VOCAB_SIZE, embedding_dim)
+        self.embedding = nn.Embedding(len(word2idx), embedding_dim)
         self.cnns = nn.ModuleList([nn.Sequential(nn.Conv1d(embedding_dim, 64, kernel),
                                                  nn.BatchNorm1d(64),
                                                  nn.ReLU())
@@ -110,7 +109,7 @@ class LSTM(nn.Module):
         super(LSTM, self).__init__()
         self.name = "LSTM"
 
-        self.embedding = nn.Embedding(VOCAB_SIZE, embedding_dim)
+        self.embedding = nn.Embedding(len(word2idx), embedding_dim)
         self.lstm = nn.LSTM(input_size=embedding_dim,
                             hidden_size=hidden_size,
                             num_layers=layers,
@@ -152,31 +151,37 @@ class HAN(nn.Module):
         # embed_dim = self.embedding.weight.shape[1]
         # TODO: load pre trained weight
         embed_dim = 128
-        self.embedding = nn.Embedding(VOCAB_SIZE, embed_dim)
+        self.embedding = nn.Embedding(len(word2idx), embed_dim)
 
         self.word_att = AttGRU(input_size=embed_dim, hidden_size=hidden_size, att_size=attention_size)
-        self.sent_att = AttGRU(input_size=hidden_size, hidden_size=hidden_size, att_size=attention_size)
+        self.sent_att = AttGRU(input_size=hidden_size * 2, hidden_size=hidden_size, att_size=attention_size)
 
-        self.fc = nn.Linear(hidden_size, num_classes)
+        self.fc = nn.Linear(hidden_size * 2, num_classes)
 
-    def forward(self, docs):
+    def forward(self, X):
         """
         N stands for batch size,
-        S stands for num of sentences per document, it is padded per batch
-        W stands for num of words per sentence, it is padded per document
-        :param: docs: list(padded S, ), inside is sent: tensor(N, W)
-        :return: out, word_att_weights (N, S, W), sent_att_weight (N, S)
+        Notes stands for num of note columns
+        W stands for num of words per sentence, it is padded along note columns for each batch
+        :param: X: list(Notes,), inside is sentence batch: tensor(N, W)
+        :return: out,
+        :return: word_att_weights (Notes,) inside is word att weight per note column (N, W),
+        :return: sent_att_weight (N, Notes)
         """
         sent_vecs = []
         word_att_weights = []
-        for i, sent in enumerate(docs):  # loop throught per sentence in a batch of documents to get sentence (N, W)
-            word_vec = self.embedding(sent)  # sent (N, L, D)
-            sent_vec, word_att_weight = self.word_att(word_vec)  # sent_vec (N, H), word_att_weight (N, W)
+        for i, note in enumerate(X):  # loop throught per note columns in a batch of documents
+            word_vec = self.embedding(note)  # sent (N, W, D)
+            try:
+                sent_vec, word_att_weight = self.word_att(word_vec)  # sent_vec (N, H), word_att_weight (N, W)
+            except:
+                print(note)
+
             sent_vecs.append(sent_vec)
             word_att_weights.append(word_att_weight)
 
-        word_att_weights = torch.stack(word_att_weights).premute(1, 0, 2)  # word_att_weight (N, S, L)
-        sent_vecs = torch.stack(sent_vecs).premute(1, 0, 2)  # sent_vecs (N, S, H)
+        # TODO: sent_vecs is not variable length, so no need attention structure
+        sent_vecs = torch.stack(sent_vecs).permute(1, 0, 2)  # sent_vecs (N, Notes, H)
 
         doc_vec, sent_att_weight = self.sent_att(sent_vecs)  # doc_vec (N, H)
         out = self.fc(doc_vec)
@@ -194,20 +199,20 @@ class AttGRU(nn.Module):
         torch.nn.init.normal_(self.query)
 
     def forward(self, x):
-        h, h_n = self.gru(x)  # both key and value of attention are h
+        h, h_n = self.gru(x)  # both key and value of attention are h (N, L, H)
 
         batch_size, padded_len, hidden_size = h.shape
-        key = h.view(batch_size * padded_len, hidden_size)  # key (N*L, H)
-        key = F.tanh(self.key_fc(key))  # key (N*L, A)
+        key = h.contiguous().view(batch_size * padded_len, hidden_size)  # key (N*L, H)
+        key = torch.tanh(self.key_fc(key))  # key (N*L, A)
         key = key.view(batch_size, padded_len, -1)  # h (N, L, A)
 
         query = self.query.repeat(batch_size, 1).unsqueeze(2)  # query (N, A, 1)
         energy = torch.bmm(key, query)  # energy (N, L, 1)
-        energy = energy.squeeze(2)  # energy (N, L, 1)
-        att_weight = F.softmax(energy, dim=1)  # att_weight (N, L)
+        att_weight = F.softmax(energy, dim=1).permute(0, 2, 1)  # att_weight (N, 1, L)
         # for simplicity, ignore the mask for different length
 
-        context = torch.bmm(att_weight, h)  # (N, H)
+        context = torch.bmm(att_weight, h).squeeze(1)  # (N, H)
+        att_weight = att_weight.squeeze(1)
 
         return context, att_weight
 
@@ -215,8 +220,8 @@ class AttGRU(nn.Module):
 if __name__ == '__main__':
     # for debug
 
-    x = [torch.randint(0, 300, (128, i)).cuda() for i in [100, 110, 120]]
-    net = HAN(512, 128, 8)
+    x = [torch.randint(0, 10000, (128, i)).cuda() for i in [100, 110, 120, 130, 140]]
+    net = HAN(128, 128, 8)
     net = net.cuda()
 
     out, word_aw, sent_aw = net(x)

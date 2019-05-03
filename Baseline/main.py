@@ -3,14 +3,17 @@ import pandas as pd
 
 import torch
 import torch.optim as optim
+from torch.utils.data import DataLoader
 import torch.nn as nn
+from torchvision.datasets import ImageFolder
+from torchvision import transforms
+import torchvision.models as models
 from sklearn.metrics import precision_recall_fscore_support
 
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import sys
 import time
 import argparse
@@ -20,7 +23,7 @@ from loader import *
 
 """###################################  init  ###################################"""
 parser = argparse.ArgumentParser(description='predication model')
-parser.add_argument('--model', "-m", type=str, default="HAN", help='Choose model structure')
+parser.add_argument('--model', "-m", type=str, default="CNN", help='Choose model structure')
 parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
 parser.add_argument('--annealing', action='store_true', help='annealing')
 parser.add_argument('--batch_size', default=128, type=int, help='batch size')
@@ -33,11 +36,18 @@ args = parser.parse_args()
 
 
 def init():
-    global net, model_stamp
-    if args.model == "HAN":
-        net = HAN(hidden_size=128,
-                  attention_size=64,
+    global net
+    global model_stamp
+
+    if args.model == "CNN":
+        net = CNN(embedding_dim=EmbeddingData.get_embedding_dim(),
                   num_classes=8)
+    elif args.model == "LSTM":
+        net = LSTM(embedding_dim=EmbeddingData.get_embedding_dim(),
+                   hidden_size=512,
+                   layers=3,
+                   dropout=0.2,
+                   num_classes=8)
     else:
         print("no specific model")
         sys.exit(0)
@@ -51,14 +61,15 @@ def init():
         t = time.localtime()
         model_stamp = "%s_%d_%.2d_%.2d" % (args.model, t.tm_mday, t.tm_hour, t.tm_min)
 
-    if args.init_xavier:
-        for name, param in net.named_parameters():
-            if 'weight' in name and "embedding" not in name:
-                torch.nn.init.normal_(param, -0.1, 0.1)
+    def xavier(m):
+        if type(m) == nn.Linear or type(m) == nn.Conv2d:
+            torch.nn.init.xavier_normal_(m.weight.data)
 
-    net = net.cuda()
+    if args.init_xavier:
+        net.apply(xavier)
 
     print("initializing " + model_stamp)
+    net = net.cuda()
 
 
 """###################################  data loader  ###################################"""
@@ -66,25 +77,17 @@ def init():
 
 def collate(batch):
     """
-    N stands for batch size,
-    Notes stands for num of note columns
-    W stands for num of words per sentence, it is padded along note columns for each batch
-    :param batch: batch (N, 1)
-    :return: X: list(Notes,), inside is sentence batch: tensor(N, W)
-    :return: word_nums: list(N, ), inside is word_num: list (unpadded S, unpadded W)
-    :return: y(N, C)
+    :param batch: [(X(len), y(classes)) * batch_size]
+    :return: [X(padded_len, batch_size, in chan), y(sum(len)]
     """
-
     X, y = zip(*batch)
-    # X (N, Notes), in each cell there is a list of word idx
-    X = np.array(X)
-    batch_size, note_size = X.shape
-    word_nums = [[len(X[i, j]) for j in range(note_size)] for i in range(batch_size)]
-    X = [rnn.pad_sequence([torch.Tensor(X[i, j]).cuda().long() for i in range(batch_size)], batch_first=True)
-         for j in range(note_size)]
+    seq_len = torch.tensor([x.shape[0] for x in X])
+    sorted_input_len, sorted_idx = seq_len.sort(descending=True)
+    X = [torch.from_numpy(X[i]) for i in sorted_idx]
+    y = [y[i] for i in sorted_idx]
     y = torch.from_numpy(np.array(y))
-
-    return X, word_nums, y.float()
+    X = rnn.pad_sequence(X, batch_first=True)
+    return X.long(), sorted_input_len, y.float()
 
 
 def data_loader():
@@ -94,10 +97,11 @@ def data_loader():
     test_dataset = Data("test")
     test_loader = DataLoader(test_dataset,
                              batch_size=args.batch_size,
-                             # num_workers=1 if args.debug else 6,
+                             num_workers=8,
                              shuffle=False,
                              collate_fn=collate)
 
+    # val_dataset = EmbeddingData("validation")
     val_dataset = Data("validation")
 
     if args.debug or args.predict:
@@ -109,48 +113,18 @@ def data_loader():
 
     val_loader = DataLoader(val_dataset,
                             batch_size=args.batch_size,
-                            # num_workers=1 if args.debug else 6,
+                            num_workers=8,
                             shuffle=True,
                             collate_fn=collate)
 
     train_loader = DataLoader(train_dataset,
                               batch_size=args.batch_size,
-                              # num_workers=1 if args.debug else 6,
+                              num_workers=8,
                               shuffle=True,
                               collate_fn=collate)
 
 
 """###################################  train  ###################################"""
-
-
-def plot_grad_flow(named_parameters, figname):
-    '''Plots the gradients flowing through different layers in the net during training.
-    Can be used for checking for possible gradient vanishing / exploding problems.
-
-    Usage: Plug this function in Trainer class after loss.backwards() as
-    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
-    ave_grads = []
-    max_grads = []
-    layers = []
-    for n, p in named_parameters:
-        if p.requires_grad and ("bias" not in n):
-            layers.append(n)
-            ave_grads.append(p.grad.abs().mean())
-            max_grads.append(p.grad.abs().max())
-    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
-    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
-    plt.hlines(0, 0, len(ave_grads) + 1, lw=2, color="k")
-    plt.xticks(range(0, len(ave_grads), 1), layers, rotation="vertical")
-    plt.xlim(left=0, right=len(ave_grads))
-    plt.xlabel("Layers")
-    plt.ylabel("average gradient")
-    plt.title("Gradient flow")
-    plt.grid(True)
-    plt.legend([Line2D([0], [0], color="c", lw=4),
-                Line2D([0], [0], color="b", lw=4),
-                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
-    plt.savefig(figname, bbox_inches='tight')
-    plt.close()
 
 
 def train(epoch, writer):
@@ -167,16 +141,16 @@ def train(epoch, writer):
 
     with tqdm(total=int(len(train_loader)), ascii=True) as pbar:
         for batch_idx, (x, seq_len, y) in enumerate(train_loader):
-            y = y.cuda()
+            x, y = x.cuda(), y.cuda()
             optimizer.zero_grad()
-            out, word_att_weights, note_att_weight = net(x)
 
-            loss = criterion(out, y)
+            outputs = net(x, seq_len)
+
+            loss = criterion(outputs, y)
             loss.backward()
 
-            pred = torch.zeros(out.shape).cuda()
-            # TODO: other criteria?
-            pred[out > 0.5] = 1.0
+            pred = torch.zeros(outputs.shape).cuda()
+            pred[outputs > 0.5] = 1.0
             total_predictions += y.shape[0] * y.shape[1]
             correct_predictions += (pred == y).sum().item()
 
@@ -196,18 +170,7 @@ def train(epoch, writer):
                                  acc_avg=round(acc, 4),
                                  f1=round(np.average(f1), 4)
                                  )
-                fig_freq = 10 if args.debug else 100
-                if batch_idx % fig_freq == 0:
-                    plot_grad_flow(net.named_parameters(),
-                                   "result/%s_gf_train_e%d_b%d.png" % (model_stamp, epoch, batch_idx))
-                    # print(utter_len[-1], listener_len[-1], trans_len[-1])
-                    plt.imshow(note_att_weight.detach().cpu().numpy(),
-                               interpolation='nearest',
-                               cmap='hot')
-                    # plt.xlabel("listener L%d" % (listener_len[-1]))
-                    # plt.ylabel("speller L%d" % (trans_len[-1]))
-                    plt.savefig("result/%s_aw_train_e%d_b%d.png" % (model_stamp, epoch, batch_idx))
-                    plt.close()
+
                 pbar.update(10 if pbar.n + 50 <= pbar.total else pbar.total - pbar.n)
 
     running_loss /= len(train_loader)
@@ -226,13 +189,13 @@ def validate(loader):
         preds = []
 
         for batch_idx, (x, seq_len, y) in enumerate(loader):
-            y = y.cuda()
-            out, word_att_weights, note_att_weight = net(x)
+            x, y = x.cuda(), y.cuda()
+            outputs = net(x, seq_len)
 
-            loss = criterion(out, y).detach()
+            loss = criterion(outputs, y).detach()
 
-            pred = torch.zeros(out.shape).cuda()
-            pred[out > 0.5] = 1.0
+            pred = torch.zeros(outputs.shape).cuda()
+            pred[outputs > 0.5] = 1.0
             preds += list(pred.cpu().numpy())
             total_predictions += y.shape[0] * y.shape[1]
             correct_predictions += (pred == y).sum().item()
@@ -250,7 +213,7 @@ def evaluate(p, r, f1, dataset):
     metrics = get_metrics_df()
     for i in range(metrics.shape[0]):
         metrics.iloc[i] = p[i], r[i], f1[i]
-    metrics.loc["micro_avg"] = np.average(np.array([p, r, f1]) * dataset.proportion, axis=1)
+    metrics.loc["micro_avg"] = np.array([p, r, f1]) * dataset.proportion
     metrics.loc["macro_avg"] = np.average([p, r, f1], axis=1)
     metrics = metrics.round(3)
     metrics.to_csv("result/%s_%s.csv" % (model_stamp, dataset.name))
@@ -316,13 +279,20 @@ def run_epochs():
 """###################################  main  ###################################"""
 if __name__ == '__main__':
     torch.multiprocessing.freeze_support()
+
     init()
+
     data_loader()  # return train and test dataset to produce prediction
 
+    # if isinstance(net, CenterResNet):
+    #     global optimizer_centerloss, center_loss
+    #     center_loss = CenterLoss(num_classes=2300, feat_dim=512) 
+    #     optimizer_centerloss = torch.optim.SGD(center_loss.parameters(), lr=0.5)
+
     global criterion, optimizer, scheduler
-    criterion = nn.BCEWithLogitsLoss()  # Binary Cross Entropy loss with Sigmoid
-    # class_weight = torch.from_numpy(1 / train_dataset.proportion)
-    # criterion = nn.MultiLabelSoftMarginLoss(weight=class_weight)
+    # criterion = nn.BCELoss()  # Binary Cross Entropy loss with Sigmoid
+    class_weight = torch.from_numpy(1 / train_dataset.proportion)
+    criterion = nn.MultiLabelSoftMarginLoss(weight=class_weight)
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
 
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
