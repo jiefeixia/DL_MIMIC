@@ -9,6 +9,7 @@ from torchvision.datasets import ImageFolder
 from torchvision import transforms
 import torchvision.models as models
 from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import f1_score
 
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
@@ -23,14 +24,14 @@ from loader import *
 
 """###################################  init  ###################################"""
 parser = argparse.ArgumentParser(description='predication model')
-parser.add_argument('--model', "-m", type=str, default="CNN", help='Choose model structure')
+parser.add_argument('--model', "-m", type=str, default="LSTM", help='Choose model structure')
 parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
 parser.add_argument('--annealing', action='store_true', help='annealing')
 parser.add_argument('--batch_size', default=128, type=int, help='batch size')
 parser.add_argument('--debug', action='store_true', help='debug mode with small dataset')
 parser.add_argument('--resume', '-r', type=str, help='resume from checkpoint')
 parser.add_argument('--init_xavier', '-i', action='store_true', help='init with xavier')
-parser.add_argument('--epoch', "-e", default=10, type=int, help='max epoch')
+parser.add_argument('--epoch', "-e", default=20, type=int, help='max epoch')
 parser.add_argument('--predict', "-p", type=str, help='list metrics of the model')
 args = parser.parse_args()
 
@@ -40,13 +41,15 @@ def init():
     global model_stamp
 
     if args.model == "CNN":
-        net = CNN(embedding_dim=EmbeddingData.get_embedding_dim(),
+        net = CNN(vocab_size=IdxData.get_vacab_size(),
+                  embedding_dim=EmbeddingData.get_embedding_dim(),
                   num_classes=8)
     elif args.model == "LSTM":
-        net = LSTM(embedding_dim=EmbeddingData.get_embedding_dim(),
+        net = LSTM(vocab_size=IdxData.get_vacab_size(),
+                   embedding_dim=EmbeddingData.get_embedding_dim(),
                    hidden_size=512,
                    layers=3,
-                   dropout=0.2,
+                   dropout=0,
                    num_classes=8)
     else:
         print("no specific model")
@@ -73,21 +76,6 @@ def init():
 
 
 """###################################  data loader  ###################################"""
-
-
-def collate(batch):
-    """
-    :param batch: [(X(len), y(classes)) * batch_size]
-    :return: [X(padded_len, batch_size, in chan), y(sum(len)]
-    """
-    X, y = zip(*batch)
-    seq_len = torch.tensor([x.shape[0] for x in X])
-    sorted_input_len, sorted_idx = seq_len.sort(descending=True)
-    X = [torch.from_numpy(X[i]) for i in sorted_idx]
-    y = [y[i] for i in sorted_idx]
-    y = torch.from_numpy(np.array(y))
-    X = rnn.pad_sequence(X, batch_first=True)
-    return X.long(), sorted_input_len, y.float()
 
 
 def data_loader():
@@ -146,13 +134,15 @@ def train(epoch, writer):
 
             outputs = net(x, seq_len)
 
+            outputs = outputs.cuda().double()
+            y = y.cuda().double()
             loss = criterion(outputs, y)
             loss.backward()
 
             pred = torch.zeros(outputs.shape).cuda()
             pred[outputs > 0.5] = 1.0
             total_predictions += y.shape[0] * y.shape[1]
-            correct_predictions += (pred == y).sum().item()
+            correct_predictions += (pred.long() == y.long()).sum().item()
 
             running_loss += loss.item()
 
@@ -165,17 +155,20 @@ def train(epoch, writer):
 
                 # metrics
                 p, r, f1, _ = precision_recall_fscore_support(y.cpu().numpy(), pred.cpu().numpy())
+                micro = precision_recall_fscore_support(y.cpu().numpy(), pred.cpu().numpy(),average='micro')
+                macro = precision_recall_fscore_support(y.cpu().numpy(), pred.cpu().numpy(),average='macro')
+                
                 acc = (correct_predictions / total_predictions)
                 pbar.set_postfix(curr_loss=round(loss.item(), 4),
                                  acc_avg=round(acc, 4),
-                                 f1=round(np.average(f1), 4)
+                                 f1=round(micro[2], 4)
                                  )
 
                 pbar.update(10 if pbar.n + 50 <= pbar.total else pbar.total - pbar.n)
 
     running_loss /= len(train_loader)
 
-    return running_loss, acc, p, r, f1
+    return running_loss, acc, p, r, f1, micro, macro
 
 
 def validate(loader):
@@ -189,43 +182,47 @@ def validate(loader):
         preds = []
 
         for batch_idx, (x, seq_len, y) in enumerate(loader):
-            x, y = x.cuda(), y.cuda()
+            x, y = x.cuda(), y.cuda().double()
             outputs = net(x, seq_len)
-
+            outputs = outputs.cuda().double()
+            y = y.cuda().double()
             loss = criterion(outputs, y).detach()
 
             pred = torch.zeros(outputs.shape).cuda()
             pred[outputs > 0.5] = 1.0
             preds += list(pred.cpu().numpy())
             total_predictions += y.shape[0] * y.shape[1]
-            correct_predictions += (pred == y).sum().item()
+            correct_predictions += (pred.long() == y.long()).sum().item()
 
             running_loss += loss.item()
 
         running_loss /= len(val_loader)
         acc = (correct_predictions / total_predictions)
         p, r, f1, _ = precision_recall_fscore_support(y.cpu().numpy(), pred.cpu().numpy())
+        micro = precision_recall_fscore_support(y.cpu().numpy(), pred.cpu().numpy(),average='micro')
+        macro = precision_recall_fscore_support(y.cpu().numpy(), pred.cpu().numpy(),average='macro')
 
-        return running_loss, acc, p, r, f1, np.array(preds)
+        return running_loss, acc, p, r, f1, micro, macro, np.array(preds)
 
 
-def evaluate(p, r, f1, dataset):
+def evaluate(p, r, f1, f1_micro, f1_macro, dataset):
+    test_p_micro, test_r_micro, test_f1_micro, _ = f1_micro
+    test_p_macro, test_r_macro, test_f1_macro, _ = f1_macro
+    
     metrics = get_metrics_df()
     for i in range(metrics.shape[0]):
         metrics.iloc[i] = p[i], r[i], f1[i]
-    metrics.loc["micro_avg"] = np.array([p, r, f1]) * dataset.proportion
-    metrics.loc["macro_avg"] = np.average([p, r, f1], axis=1)
+    metrics.loc["micro_avg"] = np.array([test_p_micro, test_r_micro, test_f1_micro])
+    metrics.loc["macro_avg"] = np.array([test_p_macro, test_r_macro, test_f1_macro])
     metrics = metrics.round(3)
     metrics.to_csv("result/%s_%s.csv" % (model_stamp, dataset.name))
-
+    return metrics
 
 def run_epochs():
     epoch = 0
     if args.resume:
         check_point = torch.load(args.resume)
         epoch = check_point["epoch"] + 1
-    if args.predict:
-        return
     elif args.debug:
         args.epoch = 1
 
@@ -240,24 +237,28 @@ def run_epochs():
 
     print("start training from epoch", epoch, "-", args.epoch)
     print("statistics for epoch are average among samples and micro average among classes if possible")
-    best_val_f1 = 0
+    best_val_f1_micro = 0
     for e in range(epoch, args.epoch):
         if args.annealing:
             scheduler.step()
 
-        train_loss, train_acc, train_p, train_r, train_f1 = train(epoch, writer)
-        val_loss, val_acc, val_p, val_r, val_f1, preds = validate(val_loader)
+        train_loss, train_acc, train_p, train_r, train_f1, train_micro, train_macro = train(epoch, writer)
+        val_loss, val_acc, val_p, val_r, val_f1, val_micro, val_macro, val_preds = validate(val_loader)
+        test_loss, test_acc, test_p, test_r, test_f1, test_micro, test_macro, test_preds = validate(test_loader)
 
+        train_p_micro, train_r_micro, train_f1_micro, _= train_micro
+        val_p_micro, val_r_micro, val_f1_micro, _ = val_micro
+                                        
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
-        print("\re %3d: Train:l:%.3f|acc:%.3f|p:%.3f|r:%.3f|f1:%.3f|||Val:l:%.3f|acc:%.3f|p:%.3f|r:%.3f|f1:%.3f" %
-              (e, train_loss, train_acc, *np.average([train_p, train_r, train_f1], axis=1),
-               val_loss, val_acc, *np.average([val_p, val_r, val_f1], axis=1)))
+        print("\re %3d: Train:l:%.3f|acc:%.3f|f1:%.3f|||Val:l:%.3f|acc:%.3f|f1:%.3f" %
+              (e, train_loss, train_acc, train_f1_micro,
+               val_loss, val_acc, val_f1_micro))
 
         # save check point
-        if not args.debug and np.average(val_f1) > best_val_f1:
-            best_val_f1 = np.average(val_f1)
+        if not args.debug and val_f1_micro > best_val_f1_micro:
+            best_val_f1_micro = val_f1_micro
             # save model
             state = {'net': net.state_dict(),
                      "train_losses": train_losses,
@@ -265,15 +266,17 @@ def run_epochs():
                      'epoch': e,
                      }
             torch.save(state, '%s.pth' % model_stamp)
-            # evaluate model
-            evaluate(train_p, train_r, train_f1, dataset=train_dataset)
-            evaluate(val_p, val_r, val_f1, dataset=val_dataset)
-            np.save("result/%s_pred.npy" % model_stamp, np.array(preds))
-    print("predicting result on test dataset...")
-    test_loss, test_acc, test_p, test_r, test_f1, preds = validate(test_loader)
-    print("T:l:%.3f|acc:%.3f" % (test_loss, test_acc))
-    evaluate(test_p, test_r, test_f1, dataset=test_dataset)
+            # evaluate model only for the best epoch
+            _ = evaluate(test_p, test_r, test_f1, test_micro, test_macro, dataset=test_dataset)
+            np.save("result/%s_pred.npy" % model_stamp, np.array(val_preds))
+
     writer.close()
+    #print("predicting result on test dataset...")
+    #test_loss, test_acc, test_p, test_r, test_f1_micro, test_f1_macro, preds = validate(test_loader)
+    #print("T:l:%.3f|acc:%.3f" % (test_loss, test_acc))
+    #metrics = evaluate(test_p, test_r, test_f1, dataset=test_dataset)
+    #print(metrics)
+
 
 
 """###################################  main  ###################################"""
@@ -291,10 +294,16 @@ if __name__ == '__main__':
 
     global criterion, optimizer, scheduler
     # criterion = nn.BCELoss()  # Binary Cross Entropy loss with Sigmoid
-    class_weight = torch.from_numpy(1 / train_dataset.proportion)
+    class_weight = torch.from_numpy(1 / train_dataset.proportion).cuda().double()
     criterion = nn.MultiLabelSoftMarginLoss(weight=class_weight)
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
 
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10,15], gamma=0.1)
 
-    run_epochs()
+    if args.predict:
+        check_point = torch.load(args.predict)
+        net.load_state_dict(check_point["net"])
+        test_loss, test_acc, test_p, test_r, test_f1, test_micro, test_macro, test_preds = validate(test_loader)
+        metrics = evaluate(test_p, test_r, test_f1, test_micro, test_macro, dataset=test_dataset)
+    else:
+        run_epochs()
